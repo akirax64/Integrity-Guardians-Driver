@@ -1,0 +1,62 @@
+;
+; IGWinx64Driver.inf
+;
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = System ; TODO: specify appropriate Class
+ClassGuid   = {4d36e97d-e325-11ce-bfc1-08002be10318} ; TODO: specify appropriate ClassGuid
+Provider    = %ManufacturerName%
+CatalogFile = IGWinx64Driver.cat
+DriverVer   = ; TODO: set DriverVer in stampinf property pages
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir = 13
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+IGWinx64Driver.sys  = 1,,
+
+;*****************************************
+; Install Section
+;*****************************************
+
+[Manufacturer]
+%ManufacturerName% = Standard,NT$ARCH$.10.0...16299 ; %13% support introduced in build 16299
+
+[Standard.NT$ARCH$.10.0...16299]
+%IGWinx64Driver.DeviceDesc% = IGWinx64Driver_Device, Root\IGWinx64Driver ; TODO: edit hw-id
+
+[IGWinx64Driver_Device.NT]
+CopyFiles = File_Copy
+
+[File_Copy]
+IGWinx64Driver.sys
+
+;-------------- Service installation
+[IGWinx64Driver_Device.NT.Services]
+AddService = IGWinx64Driver,%SPSVCINST_ASSOCSERVICE%, IGWinx64Driver_Service_Inst
+
+; -------------- IGWinx64Driver driver install sections
+[IGWinx64Driver_Service_Inst]
+DisplayName    = %IGWinx64Driver.SVCDESC%
+ServiceType    = 1               ; SERVICE_KERNEL_DRIVER
+StartType      = 3               ; SERVICE_DEMAND_START
+ErrorControl   = 1               ; SERVICE_ERROR_NORMAL
+ServiceBinary  = %13%\IGWinx64Driver.sys
+
+[IGWinx64Driver_Device.NT.Wdf]
+KmdfService = IGWinx64Driver, IGWinx64Driver_wdfsect
+
+[IGWinx64Driver_wdfsect]
+KmdfLibraryVersion = $KMDFVERSION$
+
+[Strings]
+SPSVCINST_ASSOCSERVICE = 0x00000002
+ManufacturerName = "<Your manufacturer name>" ;TODO: Replace with your manufacturer name
+DiskName = "IGWinx64Driver Installation Disk"
+IGWinx64Driver.DeviceDesc = "IGWinx64Driver Device"
+IGWinx64Driver.SVCDESC = "IGWinx64Driver Service"
