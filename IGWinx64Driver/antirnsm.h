@@ -3,14 +3,13 @@
 
 #pragma once
 
-#include <fltKernel.h> 
+#include <fltKernel.h>
+#include <ntddk.h>
 #include <wdm.h>      
 #include <ntstrsafe.h>
 
 // definição do GUID do mini-filter
-CONST GUID MiniFilterGuid = {
-    0xd4e01f9e, 0x73f2, 0x4b19, {0xb0, 0x3d, 0xcf, 0x37, 0x5b, 0x86, 0x32, 0xf0}
-};
+extern CONST GUID MiniFilterGuid;
 
 // link simbólico para comunicação com o user mode
 #define DEVICE_NAME     L"\\Host\\IGAntiRansomware"
@@ -123,10 +122,10 @@ FLT_PREOP_CALLBACK_STATUS InPreWrite(_Inout_ PFLT_CALLBACK_DATA Data, _In_ PCFLT
 FLT_POSTOP_CALLBACK_STATUS InPostWrite(_Inout_ PFLT_CALLBACK_DATA Data, _In_ PCFLT_RELATED_OBJECTS FltObjects, _In_opt_ PVOID CompletionContext, _In_ FLT_POST_OPERATION_FLAGS Flags);
 
 // Callbacks de gerenciamento de instância
-NTSTATUS InstanceSetup(_In_ PCFLT_RELATED_OBJECTS FltObjects, _In_ FLT_INSTANCE_SETUP_FLAGS Flags, _In_ DEVICE_TYPE VolumeDeviceType, _In_ FLT_FILESYSTEM_TYPE VolumeFilesystemType);
-VOID InstanceQueryTeardown(_In_ PCFLT_RELATED_OBJECTS FltObjects, _In_ FLT_INSTANCE_QUERY_TEARDOWN_FLAGS Flags);
-VOID InstanceTeardownStart(_In_ PCFLT_RELATED_OBJECTS FltObjects, _In_ FLT_INSTANCE_TEARDOWN_FLAGS Flags);
-VOID InstanceTeardownComplete(_In_ PCFLT_RELATED_OBJECTS FltObjects, _In_ FLT_INSTANCE_TEARDOWN_FLAGS Flags);
+NTSTATUS FLTAPI InstanceConfig(_In_ PCFLT_RELATED_OBJECTS FltObjects, _In_ FLT_INSTANCE_SETUP_FLAGS Flags, _In_ DEVICE_TYPE VolumeDeviceType, _In_ FLT_FILESYSTEM_TYPE VolumeFilesystemType);
+VOID FLTAPI InstanceQueryTeardown(_In_ PCFLT_RELATED_OBJECTS FltObjects, _In_ FLT_INSTANCE_QUERY_TEARDOWN_FLAGS Flags);
+VOID FLTAPI InstanceTeardownStart(_In_ PCFLT_RELATED_OBJECTS FltObjects, _In_ FLT_INSTANCE_TEARDOWN_FLAGS Flags);
+VOID FLTAPI InstanceTeardownComplete(_In_ PCFLT_RELATED_OBJECTS FltObjects, _In_ FLT_INSTANCE_TEARDOWN_FLAGS Flags);
 
 // detection.c (criar um arquivo separado para detecção)
 BOOLEAN ScanBuffer(_In_ PVOID Buffer, _In_ ULONG Length, _In_ PUNICODE_STRING FileName, _In_opt_ PEPROCESS Process);

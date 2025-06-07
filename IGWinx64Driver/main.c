@@ -1,7 +1,4 @@
 #include "antirnsm.h"
-#include <wdm.h>
-#include <fltKernel.h>
-#include <ntddk.h>
 
 // variaveis globais do driver
 PFLT_FILTER g_FilterHandle = NULL;
@@ -10,15 +7,18 @@ UNICODE_STRING g_DosDeviceName = RTL_CONSTANT_STRING(DOS_DEVICE_NAME);
 PFLT_PORT g_ServerPort = NULL;
 DRIVER_CONTEXT g_driverContext;
 
-// Declaração do array de callbacks para o Filter Manager (implementar quando criar callbacks.c)
 extern CONST FLT_OPERATION_REGISTRATION Callbacks[] = {
-	// depois criar a definição dos callbacks de operações do mini-filter driver
-    // Exemplo: { IRP_MJ_CREATE, 0, PreCreateCallback, PostCreateCallback },
-    //          { IRP_MJ_READ, 0, PreReadCallback, PostReadCallback },
-    //          { IRP_MJ_WRITE, 0, PreWriteCallback, PostWriteCallback },
+    { IRP_MJ_CREATE, 0, InPreCreate, InPostCreate }, 
+    { IRP_MJ_READ, 0, NULL, NULL }, // criar funcoes de leitura 
+    { IRP_MJ_WRITE, 0, InPreWrite, InPostWrite }, 
+    /*{IRP_MJ_DEVICE_CONTROL, 0, NULL, DeviceControl}, criar callback para controle de dispositivo */
+    { IRP_MJ_SET_INFORMATION, 0, NULL, NULL },
     { IRP_MJ_OPERATION_END } // Termina a lista de callbacks
 };
 
+CONST GUID MiniFilterGuid = {
+    0xd4e01f9e, 0x73f2, 0x4b19, {0xb0, 0x3d, 0xcf, 0x37, 0x5b, 0x86, 0x32, 0xf0}
+};
 // criação do registro do mini-filter driver
 CONST FLT_REGISTRATION FilterRegistration = {
     sizeof(FLT_REGISTRATION),
@@ -30,11 +30,10 @@ CONST FLT_REGISTRATION FilterRegistration = {
 
     Unload,
 
-    //criar estes callbacks
-    //InstanceSetup, // InstanceSetup
-    //InstanceQueryTeardown, // InstanceQueryTeardown
-    //, // InstanceTeardownStart
-    //InstanceTeardownComplete, // InstanceTeardownComplete
+    InstanceConfig,
+    (PFLT_INSTANCE_QUERY_TEARDOWN_CALLBACK)InstanceQueryTeardown,
+    InstanceTeardownStart,
+    InstanceTeardownComplete,
 
     NULL, // GenerateFileName
     NULL, // GenerateFileNameCallback
