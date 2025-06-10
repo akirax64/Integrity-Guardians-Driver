@@ -1,5 +1,5 @@
-#ifndef _ANTI_RANSOMWARE_DRIVER_H_
-#define _ANTI_RANSOMWARE_DRIVER_H_
+#ifndef _ANTI_RANSOMWARE_H_
+#define _ANTI_RANSOMWARE_H_
 
 #pragma once
 
@@ -114,33 +114,33 @@ NTSTATUS ConnectionNotifyCallback(_In_ PFLT_PORT clientPort, _In_ PVOID serverPo
 VOID DisconnectionNotifyCallback(_In_ PVOID connectionCookie);
 NTSTATUS MessageNotifyCallback(_In_ PVOID portCookie, _In_ PVOID inputBuffer, _In_ ULONG inputBufferLength, _Out_ PVOID outputBuffer, _In_ ULONG outputBufferLength, _Out_ PULONG returnOutputBufferLength);
 
-// callbacks.c (criar um arquivo separado para callbacks)
+// callbacks.c
 extern CONST FLT_OPERATION_REGISTRATION Callbacks[];
-FLT_PREOP_CALLBACK_STATUS InPreCreate(_Inout_ PFLT_CALLBACK_DATA Data, _In_ PCFLT_RELATED_OBJECTS FltObjects, _Flt_CompletionContext_Outptr_ PVOID* CompletionContext);
-FLT_POSTOP_CALLBACK_STATUS InPostCreate(_Inout_ PFLT_CALLBACK_DATA Data, _In_ PCFLT_RELATED_OBJECTS FltObjects, _In_opt_ PVOID CompletionContext, _In_ FLT_POST_OPERATION_FLAGS Flags);
-FLT_PREOP_CALLBACK_STATUS InPreWrite(_Inout_ PFLT_CALLBACK_DATA Data, _In_ PCFLT_RELATED_OBJECTS FltObjects, _Flt_CompletionContext_Outptr_ PVOID* CompletionContext);
-FLT_POSTOP_CALLBACK_STATUS InPostWrite(_Inout_ PFLT_CALLBACK_DATA Data, _In_ PCFLT_RELATED_OBJECTS FltObjects, _In_opt_ PVOID CompletionContext, _In_ FLT_POST_OPERATION_FLAGS Flags);
+FLT_PREOP_CALLBACK_STATUS InPreCreate(_Inout_ PFLT_CALLBACK_DATA data, _In_ PCFLT_RELATED_OBJECTS fltObjects, _Flt_CompletionContext_Outptr_ PVOID* ptr_context);
+FLT_POSTOP_CALLBACK_STATUS InPostCreate(_Inout_ PFLT_CALLBACK_DATA data, _In_ PCFLT_RELATED_OBJECTS fltObjects, _In_opt_ PVOID context, _In_ FLT_POST_OPERATION_FLAGS flags);
+FLT_PREOP_CALLBACK_STATUS InPreWrite(_Inout_ PFLT_CALLBACK_DATA data, _In_ PCFLT_RELATED_OBJECTS fltObjects, _Flt_CompletionContext_Outptr_ PVOID* ptr_context);
+FLT_POSTOP_CALLBACK_STATUS InPostWrite(_Inout_ PFLT_CALLBACK_DATA data, _In_ PCFLT_RELATED_OBJECTS fltObjects, _In_opt_ PVOID context, _In_ FLT_POST_OPERATION_FLAGS flags);
 
 // Callbacks de gerenciamento de instância
-NTSTATUS FLTAPI InstanceConfig(_In_ PCFLT_RELATED_OBJECTS FltObjects, _In_ FLT_INSTANCE_SETUP_FLAGS Flags, _In_ DEVICE_TYPE VolumeDeviceType, _In_ FLT_FILESYSTEM_TYPE VolumeFilesystemType);
-VOID FLTAPI InstanceQueryTeardown(_In_ PCFLT_RELATED_OBJECTS FltObjects, _In_ FLT_INSTANCE_QUERY_TEARDOWN_FLAGS Flags);
-VOID FLTAPI InstanceTeardownStart(_In_ PCFLT_RELATED_OBJECTS FltObjects, _In_ FLT_INSTANCE_TEARDOWN_FLAGS Flags);
-VOID FLTAPI InstanceTeardownComplete(_In_ PCFLT_RELATED_OBJECTS FltObjects, _In_ FLT_INSTANCE_TEARDOWN_FLAGS Flags);
+NTSTATUS FLTAPI InstanceConfig(_In_ PCFLT_RELATED_OBJECTS fltObjects, _In_ FLT_INSTANCE_SETUP_FLAGS flags, _In_ DEVICE_TYPE volType, _In_ FLT_FILESYSTEM_TYPE volSysType);
+VOID FLTAPI InstanceQueryTeardown(_In_ PCFLT_RELATED_OBJECTS fltObjects, _In_ FLT_INSTANCE_QUERY_TEARDOWN_FLAGS flags);
+VOID FLTAPI InstanceTeardownStart(_In_ PCFLT_RELATED_OBJECTS fltObjects, _In_ FLT_INSTANCE_TEARDOWN_FLAGS flags);
+VOID FLTAPI InstanceTeardownComplete(_In_ PCFLT_RELATED_OBJECTS fltObjects, _In_ FLT_INSTANCE_TEARDOWN_FLAGS flags);
 
-// detection.c (criar um arquivo separado para detecção)
-BOOLEAN ScanBuffer(_In_ PVOID Buffer, _In_ ULONG Length, _In_ PUNICODE_STRING FileName, _In_opt_ PEPROCESS Process);
-BOOLEAN ScanFileContent(_In_ PFILE_OBJECT FileObject, _In_opt_ PEPROCESS Process);
+// detection.c
+BOOLEAN ScanBuffer(_In_ PVOID buffer, _In_ ULONG length, _In_ PUNICODE_STRING fileName, _In_opt_ PEPROCESS process);
+BOOLEAN ScanFileContent(_In_ PFILE_OBJECT fileObject, _In_opt_ PEPROCESS process);
 NTSTATUS LoadRules(_In_ PTR_RULES_DATA rulesData, _In_ ULONG rulesDataLength);
 
 // mitigation.c (criar um arquivo separado para mitigação)
-NTSTATUS BackupFile(_In_ PFILE_OBJECT FileObject, _In_ PUNICODE_STRING OriginalFileName);
-VOID TerminateProcess(_In_ PEPROCESS Process);
+NTSTATUS BackupFile(_In_ PFILE_OBJECT fileObject, _In_ PUNICODE_STRING originalFileName);
+VOID TerminateProcess(_In_ PEPROCESS process);
 
 // communication.c (criar um arquivo separado para comunicação com o user mode)
-NTSTATUS QueueAlert(_In_ ALERT_DATA AlertData);
-NTSTATUS GetAlert(_Out_ PVOID OutputBuffer, _In_ ULONG OutputBufferLength, _Out_ PULONG ReturnOutputBufferLength);
+NTSTATUS QueueAlert(_In_ ALERT_DATA alertData);
+NTSTATUS GetAlert(_Out_ PVOID outputBuffer, _In_ ULONG outputBufferLength, _Out_ PULONG returnOutputBufferLength);
 
 // utils.c (criar um arquivo separado para utilitários)
-NTSTATUS GetProcessImageName(_In_ HANDLE ProcessId, _Out_ PUNICODE_STRING ImageName);
+NTSTATUS GetProcessImageName(_In_ HANDLE processId, _Out_ PUNICODE_STRING imageName);
 
 #endif
