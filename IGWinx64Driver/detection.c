@@ -25,50 +25,49 @@ ScanBuffer(
     PTR_RULE_INFO rule = NULL;
     BOOLEAN detected = FALSE;
 
-    // Iterar sobre as regras de detecção carregadas
+	// iteraçao sobre a lista de regras
     listEntry = g_driverContext.RulesList.Flink;
     while (listEntry != &g_driverContext.RulesList) {
         rule = CONTAINING_RECORD(listEntry, RULE_INFO, ListEntry);
 
-        // TODO: Implementar a lógica de busca de padrões mais sofisticada (Boyer-Moore, Aho-Corasick)
-        // Por enquanto, um simples RtlCompareMemory (como a string "RANSOM")
+		// implementar logicas mais complexas de detecção aqui
+        
         if (rule->PatternData && rule->PatternLength > 0 && length >= rule->PatternLength) {
             for (ULONG i = 0; i <= length - rule->PatternLength; ++i) {
                 if (RtlCompareMemory((PUCHAR)buffer + i, rule->PatternData, rule->PatternLength) == rule->PatternLength) {
                     DbgPrint("!!! Detection: Rule '%wZ' detected in %wZ !!!\n", &rule->RuleName, fileName);
 
-                    // Notificar o user mode sobre a detecção
+					// vai notificar o user mode sobre a detecção
                     PTR_ALERT_DATA alert = (PTR_ALERT_DATA)ExAllocatePoolWithTag(
-                        NonPagedPool, sizeof(ALERT_DATA), 'ALRT'); // Alocar no NonPagedPool para alerts
+                        NonPagedPool, sizeof(ALERT_DATA), 'WARN');
+					// se o alert for alocado com sucesso, preenche os dados
                     if (alert) {
                         RtlZeroMemory(alert, sizeof(ALERT_DATA));
                         alert->Timestamp.QuadPart = KeQueryPerformanceCounter(NULL).QuadPart;
                         alert->ProcessId = HandleToUlong(PsGetCurrentProcessId());
                         alert->ThreadId = HandleToUlong(PsGetCurrentThreadId());
                         RtlStringCchCopyW(alert->FilePath, UNICODE_STRING_MAX_CHARS, fileName->Buffer);
-                        alert->DetectionType = rule->Id; // Usar o RuleId como tipo de detecção
+						alert->DetectionType = rule->Id; // o id da regra é usado como tipo de detecção
                         RtlStringCchPrintfW(alert->AlertMessage, 256, L"Rule '%wZ' matched.", &rule->RuleName);
 						//QueueAlert(alert); criar QueueAlert em communication.c para enviar alertas ao user mode
-                        // A memória do alert será liberada por ArGetAlert quando o user mode o consumir
+                        
+						//vai liberar a memória do alerta após o envio
                     }
                     detected = TRUE;
-                    break; // Regra detectada, pode parar de procurar por esta regra
+                    if (detected && (rule->Flags & 0x01)) { // se for detectado algo e a flag ser acionada, interrompe o loop
+                        break;
+                    }
                 }
             }
         }
-        if (detected && (rule->Flags & 0x01)) { // Exemplo: Flag para parar após primeira detecção
-            break;
-        }
-
-        listEntry = listEntry->Flink;
+		listEntry = listEntry->Flink;
     }
-
     ExReleasePushLockShared(&g_driverContext.RulesListLock);
 
     return detected;
 }
 
-// Exemplo: Função para escanear o conteúdo completo de um arquivo (requer mais implementação)
+// função para escanear o conteúdo de um arquivo (precisa de implementação completa)
 BOOLEAN
 ScanFileContent(
     _In_ PFILE_OBJECT fileObject,
@@ -78,64 +77,138 @@ ScanFileContent(
     UNREFERENCED_PARAMETER(fileObject);
     UNREFERENCED_PARAMETER(process);
     DbgPrint("Detection: ScanFileContent - Not fully implemented yet. Reads file content for full scan.\n");
-    // Implementar leitura do arquivo em chunks e passar para ArScanBuffer
+	// implementar a leitura do conteúdo do arquivo em buffers e chamar ScanBuffer
     return FALSE;
 }
 
-// Função para carregar as regras de detecção do user mode
+// funçao de carregamento de regras
 NTSTATUS
 LoadRules(
     _In_ PTR_RULES_DATA rulesData,
     _In_ ULONG rulesDataLength
 )
 {
+    NTSTATUS status = STATUS_SUCCESS;
+
+    // se os dados de regras forem nulos ou inválidos, retorna erro
     if (!rulesData || rulesDataLength < sizeof(RULES_DATA) || rulesData->NumberOfRules == 0) {
-        DbgPrint("Detection: ArLoadRules - Invalid input data.\n");
+        DbgPrint("Detection: LoadRules - Invalid input data (rulesData or length or NumberOfRules).\n");
         return STATUS_INVALID_PARAMETER;
     }
 
-    DbgPrint("Detection: ArLoadRules - Received %lu rules.\n", rulesData->NumberOfRules);
+    DbgPrint("Detection: LoadRules - Received %lu rules.\n", rulesData->NumberOfRules);
 
     ExAcquirePushLockExclusive(&g_driverContext.RulesListLock);
 
-    // TODO: Primeiramente, limpar as regras existentes (se houver) para evitar vazamentos
-    // ArFreeRulesList(&g_AntiRansomwareContext.YaraRulesList);
+    // implementar FreeRulesList para liberar toda a memória (PatternData, RuleName.Buffer e a própria RULE_INFO)
+    // para cada item na g_driverContext.RulesList.
+    // FreeRulesList(&g_AntiRansomwareContext.YaraRulesList);
 
-    // Iterar sobre os dados recebidos e adicionar as novas regras
-    PUCHAR currentRulePtr = (PUCHAR)rulesData->Rules;
+	// iteração dos dados de regras recebidos 
+    
+	PUCHAR ptr_currentRuleRawData = (PUCHAR)rulesData->Rules; // apontando para o início dos dados de regras
+
     for (ULONG i = 0; i < rulesData->NumberOfRules; i++) {
-        PTR_RULE_INFO newRule = (PTR_RULE_INFO)ExAllocatePoolWithTag(
-            PagedPool, sizeof(RULE_INFO), 'YRLR');
-        if (!newRule) {
-            DbgPrint("Detection: ArLoadRules - Failed to allocate memory for new rule.\n");
-            // TODO: Tratar falha, talvez reverter regras adicionadas
-            ExReleasePushLockExclusive(&g_driverContext.RulesListLock);
-            return STATUS_INSUFFICIENT_RESOURCES;
+        PTR_RULE_INFO sourceRule = (PTR_RULE_INFO)ptr_currentRuleRawData; // A regra como ela é no buffer de entrada
+
+		// verifica se a regra serializaeda é válida (não nula, comprimento do padrão válido, etc.)
+        if (rulesDataLength < (ptr_currentRuleRawData - (PUCHAR)rulesData) + sizeof(RULE_INFO) + sourceRule->PatternLength + sourceRule->RuleName.MaximumLength) {
+            DbgPrint("Detection: LoadRules - Buffer too small for rule %lu.\n", i);
+            status = STATUS_INVALID_PARAMETER;
+            break; 
         }
-        RtlZeroMemory(newRule, sizeof(RULE_INFO));
-
-        // Copiar os dados da regra do buffer de entrada
-        RtlCopyMemory(newRule, currentRulePtr, sizeof(RULE_INFO));
-
-        // Se o padrão de dados está em um buffer separado, alocá-lo e copiá-lo
-        // NOTA: Para esta demonstração, assumimos que PatternData é um offset ou que já está no lugar certo.
-        // Em um sistema real, você alocaria newRule->PatternData e copiaria de RulesData->Rules + offset.
-        // newRule->PatternData = (PCHAR)ExAllocatePoolWithTag(PagedPool, newRule->PatternLength, 'PATT');
-        // if (newRule->PatternData) {
-        //     RtlCopyMemory(newRule->PatternData, currentRulePtr + sizeof(AR_YARA_RULE_INFO), newRule->PatternLength);
-        // }
 
 
+		// alocaçao de memória para a nova regra
+        PTR_RULE_INFO newRule = (PTR_RULE_INFO)ExAllocatePoolWithTag(
+            PagedPool, sizeof(RULE_INFO), 'DTRL'); // Tag 'DTRL' para Data Rule
+        if (!newRule) {
+            DbgPrint("Detection: LoadRules - Failed to allocate memory for new rule.\n");
+            status = STATUS_INSUFFICIENT_RESOURCES;
+            break;
+        }
+        RtlZeroMemory(newRule, sizeof(RULE_INFO)); // Limpa a nova estrutura
+
+		// copiando os dados da regra serializada para a nova estrutura
+        newRule->Id = sourceRule->Id;
+        newRule->Flags = sourceRule->Flags;
+        newRule->PatternLength = sourceRule->PatternLength;
+
+
+		// alocacao e cópia do nome da regra (RuleName)
+        if (sourceRule->RuleName.Length > 0 && sourceRule->RuleName.Buffer) {
+            PUCHAR pRuleNameData = (PUCHAR)sourceRule->RuleName.Buffer; // Aponta para onde a string está no buffer de entrada
+
+            newRule->RuleName.Length = sourceRule->RuleName.Length;
+            newRule->RuleName.MaximumLength = sourceRule->RuleName.MaximumLength + sizeof(WCHAR); 
+
+            // Aloca memória para a string da RuleName
+            newRule->RuleName.Buffer = (PWSTR)ExAllocatePoolWithTag(
+				PagedPool, newRule->RuleName.MaximumLength, 'RLNM'); // Tag 'RLNM' para Rule Name
+            if (!newRule->RuleName.Buffer) {
+                DbgPrint("Detection: LoadRules - Failed to allocate memory for RuleName buffer.\n");
+				ExFreePoolWithTag(newRule, 'RERR'); // vai liberar a RULE_INFO se falhar
+                status = STATUS_INSUFFICIENT_RESOURCES;
+                break;
+            }
+           
+            RtlCopyMemory(newRule->RuleName.Buffer, pRuleNameData, newRule->RuleName.Length);
+            
+			// sempre garantir que a string esteja terminada em nulo
+            if (newRule->RuleName.Length < newRule->RuleName.MaximumLength) {
+                newRule->RuleName.Buffer[newRule->RuleName.Length / sizeof(WCHAR)] = L'\0';
+            }
+        }
+        else {
+            RtlInitUnicodeString(&newRule->RuleName, NULL); // inicializa com string nula se não houver nome
+        }
+
+		// alocação e cópia dos dados do padrão (PatternData)
+        if (newRule->PatternLength > 0) {
+			// inicializa o ponteiro para os dados do padrão
+            PUCHAR ptr_PatternDataRaw = (PUCHAR)sourceRule + sizeof(RULE_INFO);
+
+            newRule->PatternData = ExAllocatePoolWithTag(
+                PagedPool, newRule->PatternLength, 'PTDT');// Tag 'PTDT' para Pattern Data
+            if (!newRule->PatternData) {
+                DbgPrint("Detection: LoadRules - Failed to allocate memory for PatternData.\n");
+                if (newRule->RuleName.Buffer) {
+                    ExFreePoolWithTag(newRule->RuleName.Buffer, 'RLNM'); // Libera RuleName se alocada
+                }
+				ExFreePoolWithTag(newRule, 'RERR'); // Libera a RULE_INFO se falhar
+                status = STATUS_INSUFFICIENT_RESOURCES;
+                break;
+            }
+			// vai copiar os dados do padrão para a nova memória alocada
+            RtlCopyMemory(newRule->PatternData, ptr_PatternDataRaw, newRule->PatternLength);
+        }
+        else {
+            newRule->PatternData = NULL;
+        }
+
+        // adicionando a nova regra à lista global
         InsertTailList(&g_driverContext.RulesList, &newRule->ListEntry);
 
-        // Mover para a próxima regra no buffer de entrada
-        currentRulePtr += sizeof(RULE_INFO) + newRule->PatternLength; // Ajustar conforme a estrutura real
+		// calcula o tamanho da regra serializada para avançar o ponteiro
+        ULONG currentRuleSerializedSize = sizeof(RULE_INFO) + sourceRule->PatternLength + sourceRule->RuleName.Length;
+        ptr_currentRuleRawData += currentRuleSerializedSize;
+    }
+
+    // se houve algum erro no loop, liberar as regras que foram adicionadas
+    if (!NT_SUCCESS(status)) {
+        // implementar uma função que percorra RulesList e libere todas as RULE_INFO,
+        // seus PatternData e RuleName.Buffer.
     }
 
     ExReleasePushLockExclusive(&g_driverContext.RulesListLock);
 
-    g_driverContext.MonitoringEnabled = TRUE; // Habilita o monitoramento ao carregar regras
-    DbgPrint("Detection: Rules loaded successfully. Monitoring Enabled.\n");
+    if (NT_SUCCESS(status)) {
+        g_driverContext.MonitoringEnabled = TRUE;
+        DbgPrint("Detection: Rules loaded successfully. Monitoring Enabled.\n");
+    }
+    else {
+        DbgPrint("Detection: Rules loading failed with status 0x%X.\n", status);
+    }
 
-    return STATUS_SUCCESS;
+    return status;
 }

@@ -43,7 +43,7 @@ typedef struct RULE_INFO {
     UNICODE_STRING RuleName;
     ULONG       Flags;
     ULONG       PatternLength;
-    PCHAR       PatternData;
+    PVOID       PatternData;
     // adicionar outros campos conforme necessário, como expressões regulares, etc.
 } RULE_INFO, * PTR_RULE_INFO;
 
