@@ -1,4 +1,5 @@
 #include "antirnsm.h"
+#include "enum.h"
 
 // variaveis globais do driver
 PFLT_FILTER g_FilterHandle = NULL;
@@ -235,11 +236,11 @@ DeviceControl(
     switch (ioControlCode)
     {
     case IOCTL_LOAD_RULES:
-    //    status = LoadRules(*(PTR_RULES_DATA)inputBuffer, inputBufferLength);
+        status = LoadRules((PTR_RULES_DATA)inputBuffer, inputBufferLength);
         break;
 
     case IOCTL_GET_ALERT:
-    //    status = GetAlert(outputBuffer, outputBufferLength, (PULONG)&byte_infos);
+        status = GetAlert(outputBuffer, outputBufferLength, (PULONG)&byte_infos);
         break;
 
     case IOCTL_CONFIGURE_MONITORING:

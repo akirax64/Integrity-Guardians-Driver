@@ -11,31 +11,6 @@
 // definição do GUID do mini-filter
 extern CONST GUID MiniFilterGuid;
 
-// link simbólico para comunicação com o user mode
-#define DEVICE_NAME     L"\\Host\\IGAntiRansomware"
-#define DOS_DEVICE_NAME L"\\DOSCallHost\\IGAntiRansomware"
-
-// identificador único para o nosso driver para comunicação com o user mode.
-#define DEVICE_ID 0x8000
-
-// IOCTL codes para comunicação com o user mode
-#define IOCTL_LOAD_RULES CTL_CODE( \
-    DEVICE_ID, \
-    0x800, METHOD_BUFFERED, FILE_ANY_ACCESS \
-)
-#define IOCTL_GET_ALERT CTL_CODE( \
-    DEVICE_ID, \
-    0x801, METHOD_BUFFERED, FILE_READ_ACCESS \
-)
-#define IOCTL_CONFIGURE_MONITORING CTL_CODE( \
-    DEVICE_ID, \
-    0x802, METHOD_BUFFERED, FILE_ANY_ACCESS \
-)
-#define IOCTL_STATUS CTL_CODE( \
-    DEVICE_ID, \
-    0x803, METHOD_BUFFERED, FILE_READ_ACCESS \
-)
-
 // Estrutura para regra de detecção
 typedef struct RULE_INFO {
     LIST_ENTRY  ListEntry;
@@ -132,9 +107,9 @@ BOOLEAN ScanBuffer(_In_ PVOID buffer, _In_ ULONG length, _In_ PUNICODE_STRING fi
 BOOLEAN ScanFileContent(_In_ PFILE_OBJECT fileObject, _In_opt_ PEPROCESS process);
 NTSTATUS LoadRules(_In_ PTR_RULES_DATA rulesData, _In_ ULONG rulesDataLength);
 
-// mitigation.c (criar um arquivo separado para mitigação)
-NTSTATUS BackupFile(_In_ PFILE_OBJECT fileObject, _In_ PUNICODE_STRING originalFileName);
-VOID TerminateProcess(_In_ PEPROCESS process);
+// mitigation.c 
+//NTSTATUS BackupFile(_In_ PFILE_OBJECT fileObject, _In_ PUNICODE_STRING originalFileName);
+//VOID KillMaliciousProcess(_In_ PVOID buffer, _In_ ULONG length, _In_ PUNICODE_STRING fileName, _In_ PEPROCESS process);
 
 // communication.c (criar um arquivo separado para comunicação com o user mode)
 NTSTATUS QueueAlert(_In_ ALERT_DATA alertData);
