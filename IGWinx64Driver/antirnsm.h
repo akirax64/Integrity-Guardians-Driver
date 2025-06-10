@@ -130,7 +130,7 @@ VOID FLTAPI InstanceTeardownComplete(_In_ PCFLT_RELATED_OBJECTS FltObjects, _In_
 // detection.c (criar um arquivo separado para detecção)
 BOOLEAN ScanBuffer(_In_ PVOID Buffer, _In_ ULONG Length, _In_ PUNICODE_STRING FileName, _In_opt_ PEPROCESS Process);
 BOOLEAN ScanFileContent(_In_ PFILE_OBJECT FileObject, _In_opt_ PEPROCESS Process);
-NTSTATUS LoadRules(_In_ RULES_DATA RulesData, _In_ ULONG RulesDataLength);
+NTSTATUS LoadRules(_In_ PTR_RULES_DATA rulesData, _In_ ULONG rulesDataLength);
 
 // mitigation.c (criar um arquivo separado para mitigação)
 NTSTATUS BackupFile(_In_ PFILE_OBJECT FileObject, _In_ PUNICODE_STRING OriginalFileName);
