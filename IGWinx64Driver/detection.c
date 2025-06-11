@@ -39,8 +39,8 @@ ScanBuffer(
                     DbgPrint("!!! Detection: Rule '%wZ' detected in %wZ !!!\n", &rule->RuleName, fileName);
 
 					// vai notificar o user mode sobre a detecção
-                    PTR_ALERT_DATA alert = (PTR_ALERT_DATA)ExAllocatePoolWithTag(
-                        NonPagedPool, sizeof(ALERT_DATA), 'WARN');
+                    PTR_ALERT_DATA alert = (PTR_ALERT_DATA)ExAllocatePool2(
+                        POOL_FLAG_PAGED, sizeof(ALERT_DATA), TAG_ALERT);
 					// se o alert for alocado com sucesso, preenche os dados
                     if (alert) {
                         RtlZeroMemory(alert, sizeof(ALERT_DATA));
@@ -55,7 +55,7 @@ ScanBuffer(
 						//vai liberar a memória do alerta após o envio
                     }
                     detected = TRUE;
-                    if (detected && (rule->Flags & 0x01)) { // se for detectado algo e a flag ser acionada, interrompe o loop
+                    if (detected && (rule->Flags & RULE_FLAG_MATCH)) { // se for detectado algo e a flag ser acionada, interrompe o loop
                         break;
                     }
                 }
@@ -121,8 +121,8 @@ LoadRules(
 
 
 		// alocaçao de memória para a nova regra
-        PTR_RULE_INFO newRule = (PTR_RULE_INFO)ExAllocatePoolWithTag(
-            PagedPool, sizeof(RULE_INFO), 'DTRL'); // Tag 'DTRL' para Data Rule
+        PTR_RULE_INFO newRule = (PTR_RULE_INFO)ExAllocatePool2(
+            POOL_FLAG_PAGED, sizeof(RULE_INFO), TAG_DATA_RULE); // Tag 'DTRL' para Data Rule
         if (!newRule) {
             DbgPrint("Detection: LoadRules - Failed to allocate memory for new rule.\n");
             status = STATUS_INSUFFICIENT_RESOURCES;
@@ -144,11 +144,11 @@ LoadRules(
             newRule->RuleName.MaximumLength = sourceRule->RuleName.MaximumLength + sizeof(WCHAR); 
 
             // Aloca memória para a string da RuleName
-            newRule->RuleName.Buffer = (PWSTR)ExAllocatePoolWithTag(
-				PagedPool, newRule->RuleName.MaximumLength, 'RLNM'); // Tag 'RLNM' para Rule Name
+            newRule->RuleName.Buffer = (PWSTR)ExAllocatePool2(
+                POOL_FLAG_PAGED, newRule->RuleName.MaximumLength, TAG_RULE_NAME);
             if (!newRule->RuleName.Buffer) {
                 DbgPrint("Detection: LoadRules - Failed to allocate memory for RuleName buffer.\n");
-				ExFreePoolWithTag(newRule, 'RERR'); // vai liberar a RULE_INFO se falhar
+				ExFreePoolWithTag(newRule, TAG_RULE_ERROR); // vai liberar a RULE_INFO se falhar
                 status = STATUS_INSUFFICIENT_RESOURCES;
                 break;
             }
@@ -169,12 +169,12 @@ LoadRules(
 			// inicializa o ponteiro para os dados do padrão
             PUCHAR ptr_PatternDataRaw = (PUCHAR)sourceRule + sizeof(RULE_INFO);
 
-            newRule->PatternData = ExAllocatePoolWithTag(
-                PagedPool, newRule->PatternLength, 'PTDT');// Tag 'PTDT' para Pattern Data
+            newRule->PatternData = ExAllocatePool2(
+                POOL_FLAG_PAGED, newRule->PatternLength, TAG_PATTERN);
             if (!newRule->PatternData) {
                 DbgPrint("Detection: LoadRules - Failed to allocate memory for PatternData.\n");
                 if (newRule->RuleName.Buffer) {
-                    ExFreePoolWithTag(newRule->RuleName.Buffer, 'RLNM'); // Libera RuleName se alocada
+                    ExFreePoolWithTag(newRule->RuleName.Buffer, TAG_RULE_NAME); // Libera RuleName se alocada
                 }
 				ExFreePoolWithTag(newRule, 'RERR'); // Libera a RULE_INFO se falhar
                 status = STATUS_INSUFFICIENT_RESOURCES;
