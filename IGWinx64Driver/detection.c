@@ -1,4 +1,5 @@
 #include "antirnsm.h"
+#include "enum.h"
 
 BOOLEAN
 ScanBuffer(
