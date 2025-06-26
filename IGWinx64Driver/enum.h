@@ -2,8 +2,7 @@
 #define _ENUM_H_
 #pragma once
 
-#include <ntddk.h>
-#include <wdm.h>
+#include <fltKernel.h>
 #include <ntstrsafe.h>
 
 // identificador único para o nosso driver para comunicação com o user mode.
