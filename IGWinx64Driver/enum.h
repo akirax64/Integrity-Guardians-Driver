@@ -9,8 +9,8 @@
 #define DEVICE_ID 0x8000
 
 // link simbólico para comunicação com o user mode
-#define DEVICE_NAME     L"\\Host\\IGAntiRansomware"
-#define DOS_DEVICE_NAME L"\\DOSCallHost\\IGAntiRansomware"
+#define DEVICE_NAME     L"\\Device\\IGAntiRansomware"
+#define DOS_DEVICE_NAME L"\\DosDevices\\IGAntiRansomware"
 
 // IOCTL codes para comunicação com o user mode
 #define IOCTL_LOAD_RULES CTL_CODE( \
