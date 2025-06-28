@@ -1,6 +1,36 @@
-#include "antirnsm.h"
-#include "enum.h"
+#include "detection.h"
+#include "globals.h"
+#include "cport.h" 
+#include "enum.h"   
 
+
+// verifica se o caminho fornecido deve ser excluído da detecção
+BOOLEAN
+IsPathExcluded(
+    _In_ PUNICODE_STRING PathName
+)
+{
+	// criar logica para verificar se o caminho está na lista de exclusões
+    UNREFERENCED_PARAMETER(PathName);
+    DbgPrint("Detection: IsPathExcluded called for %wZ.\n", PathName);
+    
+    return FALSE; 
+}
+
+// verifica se o caminho fornecido deve ser monitorado
+BOOLEAN
+IsPathMonitored(
+    _In_ PUNICODE_STRING pathName
+)
+{
+	// criar logica para verificar se o caminho está na lista de monitoramento
+    UNREFERENCED_PARAMETER(pathName);
+    DbgPrint("Detection: ArIsPathMonitored (placeholder) called for %wZ.\n", pathName);
+    return TRUE; 
+}
+
+
+// detecta se o buffer contém padrões de regras definidos
 BOOLEAN
 ScanBuffer(
     _In_ PVOID buffer,
@@ -9,207 +39,219 @@ ScanBuffer(
     _In_opt_ PEPROCESS process
 )
 {
-    UNREFERENCED_PARAMETER(process);
+    UNREFERENCED_PARAMETER(process); 
 
-	// se nao houver buffer ou comprimento, retorna FALSE
     if (!buffer || length == 0) {
         return FALSE;
     }
 
-    DbgPrint("Detection: Scanning buffer for %wZ...\n", fileName);
+	// verifica se o caminho do arquivo está excluído da detecção
+    if (IsPathExcluded(fileName)) {
+        DbgPrint("Detection: Path %wZ is excluded from scanning.\n", fileName);
+        return FALSE;
+    }
 
-    // Proteger o acesso à lista de regras enquanto escaneia
-    ExAcquirePushLockShared(&g_driverContext.RulesListLock);
+    DbgPrint("Detection: Scanning buffer for %wZ (Length: %lu)...\n", fileName, length);
 
-	// variáveis para iteração e detecção
-    PLIST_ENTRY listEntry = NULL;
-    PTR_RULE_INFO rule = NULL;
     BOOLEAN detected = FALSE;
 
-	// iteraçao sobre a lista de regras
-    listEntry = g_driverContext.RulesList.Flink;
-    while (listEntry != &g_driverContext.RulesList) {
-        rule = CONTAINING_RECORD(listEntry, RULE_INFO, ListEntry);
+    // protecao da lista de regras com push lock
+    ExAcquirePushLockShared(&g_driverContext.RulesListLock);
 
-		// implementar logicas mais complexas de detecção aqui
-        
+    PLIST_ENTRY listEntry = g_driverContext.RulesList.Flink;
+    while (listEntry != &g_driverContext.RulesList) {
+        PTR_RULE_INFO rule = CONTAINING_RECORD(listEntry, RULE_INFO, ListEntry);
+
         if (rule->PatternData && rule->PatternLength > 0 && length >= rule->PatternLength) {
             for (ULONG i = 0; i <= length - rule->PatternLength; ++i) {
                 if (RtlCompareMemory((PUCHAR)buffer + i, rule->PatternData, rule->PatternLength) == rule->PatternLength) {
                     DbgPrint("!!! Detection: Rule '%wZ' detected in %wZ !!!\n", &rule->RuleName, fileName);
 
-					// vai notificar o user mode sobre a detecção
-                    PTR_ALERT_DATA alert = (PTR_ALERT_DATA)ExAllocatePool2(
-                        POOL_FLAG_PAGED, sizeof(ALERT_DATA), TAG_ALERT);
-					// se o alert for alocado com sucesso, preenche os dados
-                    if (alert) {
-                        RtlZeroMemory(alert, sizeof(ALERT_DATA));
-                        alert->Timestamp.QuadPart = KeQueryPerformanceCounter(NULL).QuadPart;
-                        alert->ProcessId = HandleToUlong(PsGetCurrentProcessId());
-                        alert->ThreadId = HandleToUlong(PsGetCurrentThreadId());
-                        RtlStringCchCopyW(alert->FilePath, UNICODE_STRING_MAX_CHARS, fileName->Buffer);
-						alert->DetectionType = rule->Id; // o id da regra é usado como tipo de detecção
-                        RtlStringCchPrintfW(alert->AlertMessage, 256, L"Rule '%wZ' matched.", &rule->RuleName);
-						//QueueAlert(alert); criar QueueAlert em communication.c para enviar alertas ao user mode
-                        
-						//vai liberar a memória do alerta após o envio
-                    }
                     detected = TRUE;
-                    if (detected && (rule->Flags & RULE_FLAG_MATCH)) { // se for detectado algo e a flag ser acionada, interrompe o loop
+
+                    AlertToUserMode(
+                        fileName,
+                        PsGetCurrentProcessId(),
+                        PsGetCurrentThreadId(),
+                        rule->Id, 
+                        &rule->RuleName
+                    );
+
+                    if (detected && (rule->Flags & RULE_FLAG_MATCH)) {
+						// se for detectado e ativar a flag de match, parar a varredura
                         break;
                     }
                 }
             }
         }
-		listEntry = listEntry->Flink;
+        listEntry = listEntry->Flink;
     }
     ExReleasePushLockShared(&g_driverContext.RulesListLock);
 
     return detected;
 }
 
-// função para escanear o conteúdo de um arquivo (precisa de implementação completa)
+// escaneando o conteúdo do arquivo fornecido
 BOOLEAN
 ScanFileContent(
     _In_ PFILE_OBJECT fileObject,
+    _In_ PFLT_INSTANCE initialInstance,
     _In_opt_ PEPROCESS process
 )
 {
-    UNREFERENCED_PARAMETER(fileObject);
+    PAGED_CODE(); 
+
+    NTSTATUS            status;
+    PVOID               readBuffer = NULL;
+    ULONG               bytesToRead;
+    ULONG               bytesRead;
+    LARGE_INTEGER       byteOffset;
+    BOOLEAN             fileDetected = FALSE;
+	ULONG               chunkSize = 65536; // vai ler 64KB por vez
+	ULONG               volumeAlignmentRequirement = 512; // valor padrao minimo de alinhamento de volume
+
     UNREFERENCED_PARAMETER(process);
-    DbgPrint("Detection: ScanFileContent - Not fully implemented yet. Reads file content for full scan.\n");
-	// implementar a leitura do conteúdo do arquivo em buffers e chamar ScanBuffer
-    return FALSE;
-}
 
-// funçao de carregamento de regras
-NTSTATUS
-LoadRules(
-    _In_ PTR_RULES_DATA rulesData,
-    _In_ ULONG rulesDataLength
-)
-{
-    NTSTATUS status = STATUS_SUCCESS;
+    DbgPrint("Detection: ScanFileContent - Starting full file scan for %wZ.\n", &fileObject->FileName);
 
-    // se os dados de regras forem nulos ou inválidos, retorna erro
-    if (!rulesData || rulesDataLength < sizeof(RULES_DATA) || rulesData->NumberOfRules == 0) {
-        DbgPrint("Detection: LoadRules - Invalid input data (rulesData or length or NumberOfRules).\n");
-        return STATUS_INVALID_PARAMETER;
-    }
+    // obtendo o tamanho do volume
+    PFLT_VOLUME volume = NULL;
+    FLT_VOLUME_PROPERTIES volumeProperties;
+    ULONG returnedLength;
 
-    DbgPrint("Detection: LoadRules - Received %lu rules.\n", rulesData->NumberOfRules);
-
-    ExAcquirePushLockExclusive(&g_driverContext.RulesListLock);
-
-    // implementar FreeRulesList para liberar toda a memória (PatternData, RuleName.Buffer e a própria RULE_INFO)
-    // para cada item na g_driverContext.RulesList.
-    // FreeRulesList(&g_AntiRansomwareContext.YaraRulesList);
-
-	// iteração dos dados de regras recebidos 
-    
-	PUCHAR ptr_currentRuleRawData = (PUCHAR)rulesData->Rules; // apontando para o início dos dados de regras
-
-    for (ULONG i = 0; i < rulesData->NumberOfRules; i++) {
-        PTR_RULE_INFO sourceRule = (PTR_RULE_INFO)ptr_currentRuleRawData; // A regra como ela é no buffer de entrada
-
-		// verifica se a regra serializaeda é válida (não nula, comprimento do padrão válido, etc.)
-        if (rulesDataLength < (ptr_currentRuleRawData - (PUCHAR)rulesData) + sizeof(RULE_INFO) + sourceRule->PatternLength + sourceRule->RuleName.MaximumLength) {
-            DbgPrint("Detection: LoadRules - Buffer too small for rule %lu.\n", i);
-            status = STATUS_INVALID_PARAMETER;
-            break; 
-        }
-
-
-		// alocaçao de memória para a nova regra
-        PTR_RULE_INFO newRule = (PTR_RULE_INFO)ExAllocatePool2(
-            POOL_FLAG_PAGED, sizeof(RULE_INFO), TAG_DATA_RULE); // Tag 'DTRL' para Data Rule
-        if (!newRule) {
-            DbgPrint("Detection: LoadRules - Failed to allocate memory for new rule.\n");
-            status = STATUS_INSUFFICIENT_RESOURCES;
-            break;
-        }
-        RtlZeroMemory(newRule, sizeof(RULE_INFO)); // Limpa a nova estrutura
-
-		// copiando os dados da regra serializada para a nova estrutura
-        newRule->Id = sourceRule->Id;
-        newRule->Flags = sourceRule->Flags;
-        newRule->PatternLength = sourceRule->PatternLength;
-
-
-		// alocacao e cópia do nome da regra (RuleName)
-        if (sourceRule->RuleName.Length > 0 && sourceRule->RuleName.Buffer) {
-            PUCHAR pRuleNameData = (PUCHAR)sourceRule->RuleName.Buffer; // Aponta para onde a string está no buffer de entrada
-
-            newRule->RuleName.Length = sourceRule->RuleName.Length;
-            newRule->RuleName.MaximumLength = sourceRule->RuleName.MaximumLength + sizeof(WCHAR); 
-
-            // Aloca memória para a string da RuleName
-            newRule->RuleName.Buffer = (PWSTR)ExAllocatePool2(
-                POOL_FLAG_PAGED, newRule->RuleName.MaximumLength, TAG_RULE_NAME);
-            if (!newRule->RuleName.Buffer) {
-                DbgPrint("Detection: LoadRules - Failed to allocate memory for RuleName buffer.\n");
-				ExFreePoolWithTag(newRule, TAG_RULE_ERROR); // vai liberar a RULE_INFO se falhar
-                status = STATUS_INSUFFICIENT_RESOURCES;
-                break;
-            }
-           
-            RtlCopyMemory(newRule->RuleName.Buffer, pRuleNameData, newRule->RuleName.Length);
-            
-			// sempre garantir que a string esteja terminada em nulo
-            if (newRule->RuleName.Length < newRule->RuleName.MaximumLength) {
-                newRule->RuleName.Buffer[newRule->RuleName.Length / sizeof(WCHAR)] = L'\0';
-            }
-        }
-        else {
-            RtlInitUnicodeString(&newRule->RuleName, NULL); // inicializa com string nula se não houver nome
-        }
-
-		// alocação e cópia dos dados do padrão (PatternData)
-        if (newRule->PatternLength > 0) {
-			// inicializa o ponteiro para os dados do padrão
-            PUCHAR ptr_PatternDataRaw = (PUCHAR)sourceRule + sizeof(RULE_INFO);
-
-            newRule->PatternData = ExAllocatePool2(
-                POOL_FLAG_PAGED, newRule->PatternLength, TAG_PATTERN);
-            if (!newRule->PatternData) {
-                DbgPrint("Detection: LoadRules - Failed to allocate memory for PatternData.\n");
-                if (newRule->RuleName.Buffer) {
-                    ExFreePoolWithTag(newRule->RuleName.Buffer, TAG_RULE_NAME); // Libera RuleName se alocada
-                }
-				ExFreePoolWithTag(newRule, 'RERR'); // Libera a RULE_INFO se falhar
-                status = STATUS_INSUFFICIENT_RESOURCES;
-                break;
-            }
-			// vai copiar os dados do padrão para a nova memória alocada
-            RtlCopyMemory(newRule->PatternData, ptr_PatternDataRaw, newRule->PatternLength);
-        }
-        else {
-            newRule->PatternData = NULL;
-        }
-
-        // adicionando a nova regra à lista global
-        InsertTailList(&g_driverContext.RulesList, &newRule->ListEntry);
-
-		// calcula o tamanho da regra serializada para avançar o ponteiro
-        ULONG currentRuleSerializedSize = sizeof(RULE_INFO) + sourceRule->PatternLength + sourceRule->RuleName.Length;
-        ptr_currentRuleRawData += currentRuleSerializedSize;
-    }
-
-    // se houve algum erro no loop, liberar as regras que foram adicionadas
+    status = FltGetVolumeFromInstance(initialInstance, &volume);
     if (!NT_SUCCESS(status)) {
-        // implementar uma função que percorra RulesList e libere todas as RULE_INFO,
-        // seus PatternData e RuleName.Buffer.
+        DbgPrint("Detection: Failed to get volume from instance (0x%X) for %wZ.\n", status, &fileObject->FileName);
+        return FALSE;
     }
 
-    ExReleasePushLockExclusive(&g_driverContext.RulesListLock);
+	// pegando propriedades do volume
+    status = FltGetVolumeProperties(
+        volume,
+        &volumeProperties,
+        sizeof(volumeProperties),
+        &returnedLength
+    );
+    FltObjectDereference(volume); 
 
-    if (NT_SUCCESS(status)) {
-        g_driverContext.MonitoringEnabled = TRUE;
-        DbgPrint("Detection: Rules loaded successfully. Monitoring Enabled.\n");
+    if (!NT_SUCCESS(status)) {
+        DbgPrint("Detection: Failed to get volume properties (0x%X) for %wZ.\n", status, &fileObject->FileName);
+		// redefinindo para o padrao novamente apos falha na recuperacao de propriedades
+        volumeAlignmentRequirement = 512;
+        DbgPrint("Detection: Defaulting alignment to 512 bytes due to failed properties retrieval.\n");
     }
     else {
-        DbgPrint("Detection: Rules loading failed with status 0x%X.\n", status);
+        volumeAlignmentRequirement = volumeProperties.SectorSize;
+
+		// se o tamanho do setor do volume for 0, use o valor padrão de 512 bytes
+        if (volumeAlignmentRequirement == 0) {
+            volumeAlignmentRequirement = 512;
+            DbgPrint("Detection: Volume SectorSize reported as 0, defaulting to 512 bytes.\n");
+        }
     }
 
-    return status;
+	// garantindo que o chunkSize seja um múltiplo do alinhamento do volume
+    if (chunkSize % volumeAlignmentRequirement != 0) {
+        chunkSize = (chunkSize / volumeAlignmentRequirement + 1) * volumeAlignmentRequirement;
+        DbgPrint("Detection: Adjusted chunkSize to %lu for alignment requirement.\n", chunkSize);
+    }
+
+	// pegando informações do arquivo para verificar o tamanho
+    FILE_STANDARD_INFORMATION fileInfo;
+    status = FltQueryInformationFile(
+        initialInstance,
+        fileObject,
+        &fileInfo,
+        sizeof(fileInfo),
+        FileStandardInformation,
+        NULL
+    );
+
+    if (!NT_SUCCESS(status)) {
+        DbgPrint("Detection: Failed to get file size for %wZ (0x%X).\n", &fileObject->FileName, status);
+        return FALSE;
+    }
+    ULONGLONG fileSize = fileInfo.EndOfFile.QuadPart;
+
+    if (fileSize == 0) {
+        DbgPrint("Detection: File %wZ is empty, no scan needed.\n", &fileObject->FileName);
+        return FALSE;
+    }
+
+	// vai alocar um buffer temporário para leitura do arquivo
+    readBuffer = FltAllocatePoolAlignedWithTag(
+        initialInstance, 
+        POOL_FLAG_PAGED,
+        chunkSize,
+        TAG_SCAN
+    );
+    if (readBuffer == NULL) {
+        DbgPrint("Detection: Failed to allocate aligned buffer for file scan of %wZ.\n", &fileObject->FileName);
+        return FALSE;
+    }
+
+	byteOffset.QuadPart = 0; // vai começar do início do arquivo
+
+	// loop para ler o arquivo em blocos alinhados
+    while ((ULONGLONG)byteOffset.QuadPart < fileSize && !fileDetected) {
+		// ira calcular o tamanho do bloco a ser lido ja garantindo que seja alinhado ao tamanho do volume
+        bytesToRead = (ULONG)min((ULONGLONG)chunkSize, (ULONGLONG)(fileSize - byteOffset.QuadPart));
+        bytesToRead = (bytesToRead / volumeAlignmentRequirement) * volumeAlignmentRequirement; // Round down
+
+		// situacao de controle para evitar ler menos que o alinhamento do volume
+        if (bytesToRead == 0) {
+            if ((ULONGLONG)byteOffset.QuadPart < fileSize) {
+                DbgPrint("Detection: Remaining file bytes less than alignment requirement (%llu bytes left), stopping aligned scan.\n", fileSize - byteOffset.QuadPart);
+            }
+            break;
+        }
+
+		// tendo certeza de que o offset do arquivo está alinhado ao tamanho do volume
+        if (byteOffset.QuadPart % volumeAlignmentRequirement != 0) {
+            DbgPrint("Detection: Byte offset %llu not aligned (%lu). Critical logic error.\n", byteOffset.QuadPart, volumeAlignmentRequirement);
+            fileDetected = FALSE;
+            break;
+        }
+
+		// leitura do arquivo usando FltReadFile
+        status = FltReadFile(
+            initialInstance,                     
+            fileObject,                         
+            &byteOffset,                        
+            bytesToRead,                         
+            readBuffer,                          
+            FLTFL_IO_OPERATION_NON_CACHED,       
+            &bytesRead,                          
+            NULL,                               
+            NULL                                
+        );
+
+        if (!NT_SUCCESS(status) || bytesRead == 0) {
+            if (status == STATUS_END_OF_FILE && bytesRead > 0) {
+				// vai continuar lendo até acabar o arquivo
+            }
+            else if (status == STATUS_END_OF_FILE && bytesRead == 0) {
+                break; 
+            }
+            else {
+                DbgPrint("Detection: FltReadFile failed (0x%X) or read 0 bytes for %wZ.\n", status, &fileObject->FileName);
+                break;
+            }
+        }
+
+		// se for reconhecido um padrão no buffer lido, vai marcar como detectado
+        if (ScanBuffer(readBuffer, bytesRead, &fileObject->FileName, process)) {
+            fileDetected = TRUE;
+            break;
+        }
+
+        byteOffset.QuadPart += bytesRead;
+    }
+
+    // 5. Free the allocated buffer
+    if (readBuffer) {
+        FltFreePoolAlignedWithTag(initialInstance, readBuffer, TAG_SCAN);
+    }
+
+    return fileDetected;
 }
