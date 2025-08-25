@@ -37,6 +37,7 @@
 #define TAG_ALERT       'WARN'
 #define TAG_RULE_ERROR  'RERR'
 #define TAG_SCAN        'SCAN'
+#define TAG_BACKUP      'BCKP'
 
 #define RULE_FLAG_MATCH  0x01
 

@@ -67,4 +67,15 @@ typedef struct DRIVER_CONTEXT {
 
 } DRIVER_CONTEXT, * PTR_DRIVER_CONTEXT;
 
+typedef enum DETECTION_MODE {
+    DetectionModePassive = 0,   
+    DetectionModeActive = 1,    
+    DetectionModeMonitorOnly = 2,
+} DETECTION_MODE, * PTR_DETECTION_MODE;
+
+typedef struct MONITORING_CONFIG {
+    BOOLEAN         EnableMonitoring;   // TRUE para habilitar, FALSE para desabilitar o monitoramento
+    DETECTION_MODE  Mode;               // Modo de detecção (Passive, Active, etc.)
+    BOOLEAN         BackupOnDetection;  // TRUE para fazer backup do arquivo em caso de detecção
+} MONITORING_CONFIG, * PTR_MONITORING_CONFIG;
 #endif

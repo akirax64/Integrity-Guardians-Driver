@@ -8,13 +8,19 @@
 
 // protótipos de funções de callback para filtros
 
-NTSTATUS InitializeFilter(
+NTSTATUS 
+InitializeFilter(
 	_In_ PDRIVER_OBJECT driverObject,
 	_In_ CONST FLT_REGISTRATION* fltRegistration
 );
 
 VOID
 CleanFilter(VOID);
+
+NTSTATUS FLTAPI
+FilterUnload(
+	_In_ FLT_FILTER_UNLOAD_FLAGS flags
+);
 
 // callbacks de pré e pos-operação
 FLT_PREOP_CALLBACK_STATUS
@@ -48,28 +54,28 @@ InPostWrite(
 );
 
 // Callbacks de gerenciamento de instância
-NTSTATUS
-FLTAPI InstanceConfig(
+NTSTATUS FLTAPI 
+InstanceConfig(
 	_In_ PCFLT_RELATED_OBJECTS fltObjects,
 	_In_ FLT_INSTANCE_SETUP_FLAGS flags,
 	_In_ DEVICE_TYPE volType,
 	_In_ FLT_FILESYSTEM_TYPE volSysType
 );
 
-VOID
-FLTAPI InstanceQueryTeardown(
+NTSTATUS FLTAPI
+InstanceQueryTeardown(
 	_In_ PCFLT_RELATED_OBJECTS fltObjects,
 	_In_ FLT_INSTANCE_QUERY_TEARDOWN_FLAGS flags
 );
 
-VOID 
-FLTAPI InstanceTeardownStart(
+VOID FLTAPI 
+InstanceTeardownStart(
 	_In_ PCFLT_RELATED_OBJECTS fltObjects,
 	_In_ FLT_INSTANCE_TEARDOWN_FLAGS flags
 );
 
-VOID
-FLTAPI InstanceTeardownComplete(
+VOID FLTAPI 
+InstanceTeardownComplete(
 	_In_ PCFLT_RELATED_OBJECTS fltObjects,
 	_In_ FLT_INSTANCE_TEARDOWN_FLAGS flags
 );
