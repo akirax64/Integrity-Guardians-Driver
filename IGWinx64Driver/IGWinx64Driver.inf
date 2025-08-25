@@ -3,16 +3,13 @@
 ;
 
 [Version]
-Signature   = "$WINDOWS NT$"
-Class       = System ; TODO: specify appropriate Class
-ClassGuid   = {4d36e97d-e325-11ce-bfc1-08002be10318} ; TODO: specify appropriate ClassGuid
+Signature   = "$Windows NT$"
+Class       = "ActivityMonitor"
+ClassGuid   = {b86dff51-a31e-4bac-b3cf-e8cfe75c9fc2}
 Provider    = %ManufacturerName%
 CatalogFile = IGWinx64Driver.cat
-DriverVer   = ; TODO: set DriverVer in stampinf property pages
+DriverVer   = 08/20/2025,1.0.0.0
 PnpLockdown = 1
-
-[DestinationDirs]
-DefaultDestDir = 13
 
 [SourceDisksNames]
 1 = %DiskName%,,,""
@@ -20,43 +17,58 @@ DefaultDestDir = 13
 [SourceDisksFiles]
 IGWinx64Driver.sys  = 1,,
 
-;*****************************************
-; Install Section
-;*****************************************
+[DestinationDirs]
+DefaultInstall.DriverFiles = 13 ; driver store
 
-[Manufacturer]
-%ManufacturerName% = Standard,NT$ARCH$.10.0...16299 ; %13% support introduced in build 16299
+;
+; Default install sections
+;
 
-[Standard.NT$ARCH$.10.0...16299]
-%IGWinx64Driver.DeviceDesc% = IGWinx64Driver_Device, Root\IGWinx64Driver ; TODO: edit hw-id
+[DefaultInstall.NT$ARCH$]
+OptionDesc  = %ServiceDescription%
+CopyFiles   = DefaultInstall.DriverFiles
 
-[IGWinx64Driver_Device.NT]
-CopyFiles = File_Copy
+[DefaultInstall.NT$ARCH$.Services]
+AddService  = %ServiceName%,,IGWinx64Driver_Service_Inst
 
-[File_Copy]
+;
+; Support sections
+;
+
+[IGWinx64Driver_Service_Inst]
+DisplayName     = %IGWinx64Driver.SVCDESC%
+ServiceBinary   = %13%\%DriverName%.sys
+ServiceType     = 2 ; SERVICE_FILE_SYSTEM_DRIVER
+StartType       = 0 ; BOOT_START_TYPE
+ErrorControl    = 1 ; SERVICE_ERROR_NORMAL
+Dependencies	= "FltMgr" ; Filter Manager dependency
+LoadOrderGroup  = "FSFilter Activity Monitor"
+AddReg          = IGWinx64Driver.AddReg
+
+[IGWinx64Driver.AddReg]
+HKR, "Instances","DefaultInstance",0x00000000,%DefaultInstance%
+HKR, "Instances\"%Instance1.Name%,"Altitude",0x00000000,%Instance1.Altitude%
+HKR, "Instances\"%Instance1.Name%,"Flags",0x00010001,%Instance1.Flags%
+HKR, "Instances\"%Instance1.Name%,"Guid",0x00000000,"{5b3d6048-f852-4fe2-9ab6-5adda85daf55}"
+
+[DefaultInstall.DriverFiles]
 IGWinx64Driver.sys
 
-;-------------- Service installation
-[IGWinx64Driver_Device.NT.Services]
-AddService = IGWinx64Driver,%SPSVCINST_ASSOCSERVICE%, IGWinx64Driver_Service_Inst
-
-; -------------- IGWinx64Driver driver install sections
-[IGWinx64Driver_Service_Inst]
-DisplayName    = %IGWinx64Driver.SVCDESC%
-ServiceType    = 1               ; SERVICE_KERNEL_DRIVER
-StartType      = 3               ; SERVICE_DEMAND_START
-ErrorControl   = 1               ; SERVICE_ERROR_NORMAL
-ServiceBinary  = %13%\IGWinx64Driver.sys
-
-[IGWinx64Driver_Device.NT.Wdf]
-KmdfService = IGWinx64Driver, IGWinx64Driver_wdfsect
-
-[IGWinx64Driver_wdfsect]
-KmdfLibraryVersion = $KMDFVERSION$
+;
+; String Section
+;
 
 [Strings]
 SPSVCINST_ASSOCSERVICE = 0x00000002
-ManufacturerName = "<Your manufacturer name>" ;TODO: Replace with your manufacturer name
+ManufacturerName = "Integrity Guardians"
 DiskName = "IGWinx64Driver Installation Disk"
 IGWinx64Driver.DeviceDesc = "IGWinx64Driver Device"
 IGWinx64Driver.SVCDESC = "IGWinx64Driver Service"
+ServiceName = "IGWinx64Driver"
+ServiceDescription = "Integrity Guardians AntiRansomware Driver"
+DriverName = "IGWinx64Driver"
+
+DefaultInstance = "IGWinx64Driver Instance"
+Instance1.Name = "IGWinx64Driver Instance"
+Instance1.Altitude = "371000"
+Instance1.Flags = 0x0
