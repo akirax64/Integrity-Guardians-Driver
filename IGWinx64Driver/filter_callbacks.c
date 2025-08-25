@@ -3,6 +3,12 @@
 #include "detection.h"
 #include "globals.h"
 
+CONST FLT_OPERATION_REGISTRATION Callbacks[] = {
+    { IRP_MJ_CREATE, 0, InPreCreate, InPostCreate },
+    { IRP_MJ_WRITE, 0, InPreWrite, InPostWrite },
+    { IRP_MJ_OPERATION_END }
+};
+
 // inicialização do filter manager 
 NTSTATUS
 InitializeFilter(
@@ -14,25 +20,25 @@ InitializeFilter(
 
 	PAGED_CODE();
 
-	DbgPrint("Integrity Guardians AntiRansomware: Initializing filter driver\n");
+	DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,"Integrity Guardians AntiRansomware: Initializing filter driver\n");
 
     // registro do mini-filter
     status = FltRegisterFilter(driverObject, fltRegistration, &g_FilterHandle);
     if (!NT_SUCCESS(status)) {
-        DbgPrint("Integrity Guardians Antiransomware: Failed to register filter (0x%X)\n", status);
+        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,"Integrity Guardians Antiransomware: Failed to register filter (0x%X)\n", status);
         return status;
     }
 
     // vai inicializar o mini-filter driver
     status = FltStartFiltering(g_FilterHandle);
     if (!NT_SUCCESS(status)) {
-        DbgPrint("Integrity Guardians AntiRansomware: Failed to start filtering (0x%X)\n", status);
+        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,"Integrity Guardians AntiRansomware: Failed to start filtering (0x%X)\n", status);
         FltUnregisterFilter(g_FilterHandle);
         g_FilterHandle = NULL;
         return status;
     }
 
-    DbgPrint("Integrity Guardians AntiRansomware: Filter Manager initialized successfully!\n");
+    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,"Integrity Guardians AntiRansomware: Filter Manager initialized successfully!\n");
     return STATUS_SUCCESS;
 }
 
@@ -42,7 +48,7 @@ CleanFilter(VOID)
 {
     PAGED_CODE();
 
-    DbgPrint("Integrity Guardians AntiRansomware: Cleaning up Filter Manager...\n");
+    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,"Integrity Guardians AntiRansomware: Cleaning up Filter Manager...\n");
 
     // vai desregistrar o mini-filter driver
     if (g_FilterHandle) {
@@ -50,7 +56,19 @@ CleanFilter(VOID)
         g_FilterHandle = NULL;
     }
 
-    DbgPrint("Integrity Guardians AntiRansomware: Filter Manager cleaned up.\n");
+    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,"Integrity Guardians AntiRansomware: Filter Manager cleaned up.\n");
+}
+
+NTSTATUS FLTAPI
+FilterUnload(
+    _In_ FLT_FILTER_UNLOAD_FLAGS flags
+)
+{
+    UNREFERENCED_PARAMETER(flags); // Evita avisos de parâmetro não utilizado
+    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,"Integrity Guardians AntiRansomware: Stub function FilterUnload called.");
+    // Nenhum acesso a memória, nenhuma operação de E/S, nenhuma lógica complexa.
+    // Apenas retorna.
+	return STATUS_SUCCESS; // Indica que o filtro foi descarregado com sucesso    
 }
 
 // funcao de pré-criação de arquivos
@@ -70,7 +88,7 @@ InPreCreate(
 
 	// nome do arquivo sendo criado
     PUNICODE_STRING fileName = &data->Iopb->TargetFileObject->FileName;
-    DbgPrint("Integrity Guardians AntiRansomware: PreCreate - File: %wZ\n", fileName);
+    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,"Integrity Guardians AntiRansomware: PreCreate - File: %wZ\n", fileName);
 
 	// implementar lógica de detecção de criação de arquivos suspeitos (detection.c)
     // if ( IsSuspiciousFileCreation(Data)) { ... }
@@ -123,33 +141,28 @@ InPreWrite(
     PVOID writeBuffer = NULL;
     ULONG length = iopb->Parameters.Write.Length;
     PUNICODE_STRING fileName = &data->Iopb->TargetFileObject->FileName;
-	//PEPROCESS process = PsGetCurrentProcess(); // inicializa-la quando criar a funcao de detecção
 
-    DbgPrint("Integrity Guardians AntiRansomware: PreWrite - File: %wZ, Length: %lu\n",
+    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,"Integrity Guardians AntiRansomware: PreWrite - File: %wZ, Length: %lu\n",
         fileName, length);
 
 	if (length == 0) { // se nao há dados para escrever, finaliza a operação
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
-    // Obter o buffer de escrita de forma segura
-    writeBuffer = MmGetSystemAddressForMdlSafe(iopb->Parameters.Write.MdlAddress, HighPagePriority);
-    if (writeBuffer == NULL) {
-        DbgPrint("AntiRansomwareDriver: Failed to get write buffer for %wZ\n", fileName);
-        return FLT_PREOP_SUCCESS_NO_CALLBACK; // Não podemos analisar, então permitimos
+	// condicional para verificar se o MdlAddress é válido
+	// prevenindo bug checks ao acessar um endereço nulo ou inválido
+    if (!iopb->Parameters.Write.MdlAddress) {
+        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Integrity Guardians AntiRansomware: MdlAddress is NULL or invalid. Skipping write buffer scan for %wZ.\n", fileName);
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
-	// funão de varredura do buffer de escrita (implementar em detection.c)
-    /*if (ScanBuffer(writeBuffer, length, fileName, process)) {
-        DbgPrint("!!! Integrity Guardians AntiRansomware: RANSOMWARE DETECTED during write to %wZ !!!\n", fileName);
+    writeBuffer = MmGetSystemAddressForMdlSafe(iopb->Parameters.Write.MdlAddress, HighPagePriority);
+    if (writeBuffer == NULL) {
+        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Integrity Guardians AntiRansomware: Failed to get write buffer for %wZ\n", fileName);
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
 
-		// criar lógica para lidar com a detecção de ransomware (mitigação)
-        data->IoStatus.Status = STATUS_ACCESS_DENIED;
-        data->IoStatus.Information = 0;
-        return FLT_PREOP_COMPLETE; // Interrompe a operação
-    }*/
-
-    return FLT_PREOP_SUCCESS_NO_CALLBACK; // Permite a operação se não for detectado
+	return FLT_PREOP_SUCCESS_NO_CALLBACK; // Permite a operação se não for detectado
 }
 
 // função de pós-escrita de arquivos
@@ -188,14 +201,14 @@ InstanceConfig(
     UNREFERENCED_PARAMETER(volumeDeviceType);
     UNREFERENCED_PARAMETER(volumeFilesystemType);
 
-    DbgPrint("Integrity Guardians AntiRansomware: InstanceConfig - Attaching to volume\n");
+    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,"Integrity Guardians AntiRansomware: InstanceConfig - Attaching to volume\n");
 
 	// criar logica para "quarentena" de volumes suspeitos ou não monitorados
     return STATUS_SUCCESS; // Permite anexar a instância ao volume
 }
 
 // função de consulta de desmontagem de instância
-VOID FLTAPI
+NTSTATUS FLTAPI
 InstanceQueryTeardown(
     _In_ PCFLT_RELATED_OBJECTS fltObjects,
     _In_ FLT_INSTANCE_QUERY_TEARDOWN_FLAGS flags
@@ -203,9 +216,10 @@ InstanceQueryTeardown(
 {
     UNREFERENCED_PARAMETER(fltObjects);
     UNREFERENCED_PARAMETER(flags);
-    DbgPrint("Integrity Guardians AntiRansomware: InstanceQueryTeardown\n");
+    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,"Integrity Guardians AntiRansomware: InstanceQueryTeardown\n");
 
 	// implementar lógica para verificar se a instância pode ser desmontada
+	return STATUS_SUCCESS; // Permite a desmontagem se não houver problemas
 }
 
 // inicializacao da consulta de desmontagem de instância
@@ -217,7 +231,7 @@ InstanceTeardownStart(
 {
     UNREFERENCED_PARAMETER(f_Objects);
     UNREFERENCED_PARAMETER(flags);
-    DbgPrint("Integrity Guardians AntiRansomware: InstanceTeardownStart\n");
+    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,"Integrity Guardians AntiRansomware: InstanceTeardownStart\n");
 
 	// implementar lógica para iniciar desmontagem de instância
 }
@@ -231,7 +245,7 @@ InstanceTeardownComplete(
 {
     UNREFERENCED_PARAMETER(f_Objects);
     UNREFERENCED_PARAMETER(flags);
-    DbgPrint("Integrity Guardians AntiRansomware: InstanceTeardownComplete\n");
+    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,"Integrity Guardians AntiRansomware: InstanceTeardownComplete\n");
 
 	// logica para finalizar desmontagem de instância
 }
