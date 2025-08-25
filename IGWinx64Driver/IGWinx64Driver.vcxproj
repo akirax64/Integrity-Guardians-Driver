@@ -24,7 +24,15 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="antirnsm.h" />
+    <ClInclude Include="cport.h" />
+    <ClInclude Include="detection.h" />
+    <ClInclude Include="devicectrl.h" />
     <ClInclude Include="enum.h" />
+    <ClInclude Include="fltcallbacks.h" />
+    <ClInclude Include="globals.h" />
+    <ClInclude Include="main.h" />
+    <ClInclude Include="mitigation.h" />
+    <ClInclude Include="rules.h" />
     <ClInclude Include="Trace.h" />
   </ItemGroup>
   <ItemGroup>
@@ -146,10 +154,14 @@
     <FilesToPackage Include="$(TargetPath)" />
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="callbacks.c" />
+    <ClCompile Include="comm_port.c" />
+    <ClCompile Include="device_control.c" />
+    <ClCompile Include="filter_callbacks.c" />
     <ClCompile Include="detection.c" />
+    <ClCompile Include="globals.c" />
     <ClCompile Include="main.c" />
     <ClCompile Include="mitigation.c" />
+    <ClCompile Include="rules.c" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
