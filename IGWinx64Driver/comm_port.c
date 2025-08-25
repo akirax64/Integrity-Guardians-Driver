@@ -15,12 +15,12 @@ InitializeCommunicationPort(
 
     PAGED_CODE();
 
-    DbgPrint("Integrity Guardians AntiRansomware: Initializing communication port...\n");
+    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,"Integrity Guardians AntiRansomware: Initializing communication port...\n");
 
 	// criando o descritor de segurança para a porta de comunicação
     status = FltBuildDefaultSecurityDescriptor(&secDescriptor, FLT_PORT_ALL_ACCESS);
     if (!NT_SUCCESS(status)) {
-        DbgPrint("Integrity Guardians AntiRansomware: Failed to build the security descriptor. (0x%X)\n", status);
+        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,"Integrity Guardians AntiRansomware: Failed to build the security descriptor. (0x%X)\n", status);
         return status;
     }
 
@@ -49,12 +49,12 @@ InitializeCommunicationPort(
 
 	// se falhar ao criar a porta, loga o erro e retorna o status
     if (!NT_SUCCESS(status)) {
-        DbgPrint("Integrity Guardians AntiRansomware: Failed to create the security descriptor. (0x%X)\n", status);
+        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,"Integrity Guardians AntiRansomware: Failed to create the security descriptor. (0x%X)\n", status);
         g_ServerPort = NULL; 
         return status;
     }
 
-    DbgPrint("Integrity Guardians AntiRansomware: Communication port initialized with success!\n");
+    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,"Integrity Guardians AntiRansomware: Communication port initialized with success!\n");
     return STATUS_SUCCESS;
 }
 
@@ -64,7 +64,7 @@ CleanCommunicationPort(VOID)
 {
     PAGED_CODE();
 
-    DbgPrint("Integrity Guardians AntiRansomware: Cleaning communication port...\n");
+    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,"Integrity Guardians AntiRansomware: Cleaning communication port...\n");
 
 	// fechando a porta de comunicação do driver se ela estiver aberta
     if (g_ServerPort) {
@@ -81,7 +81,7 @@ CleanCommunicationPort(VOID)
     }
     ExReleasePushLockExclusive(&g_driverContext.AlertQueueLock);
 
-    DbgPrint("Integrity Guardians AntiRansomware: Communication port closed.\n");
+    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,"Integrity Guardians AntiRansomware: Communication port closed.\n");
 }
 
 // notificaçao de conexao do modo de usuario
@@ -100,7 +100,7 @@ ConnectionNotify(
 
     PAGED_CODE();
 
-    DbgPrint("Integrity Guardians AntiRansomware: User mode connected! ClientPort: %p\n", clientPort);
+    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,"Integrity Guardians AntiRansomware: User mode connected! ClientPort: %p\n", clientPort);
 	g_driverContext.ClientPort = clientPort; // handle para a porta do cliente
     *connectionPortCookie = NULL; 
     return STATUS_SUCCESS;
@@ -116,7 +116,7 @@ DisconnectionNotify(
 
     PAGED_CODE();
 
-    DbgPrint("Integrity Guardians AntiRansomware: User mode disconnected.\n");
+    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,"Integrity Guardians AntiRansomware: User mode disconnected.\n");
     g_driverContext.ClientPort = NULL; 
 }
 
@@ -137,7 +137,7 @@ MessageNotify(
 
     PAGED_CODE();
 
-    DbgPrint("Integrity Guardians AntiRansomware: Message received from user mode! Length: %lu\n", inputBufferLength);
+    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,"Integrity Guardians AntiRansomware: Message received from user mode! Length: %lu\n", inputBufferLength);
 
 	// logica para enviar alertas ao modo de usuário
 	// OBSERVACAO: a logica esta com uma implementaçao pull (user mode solicita alertas)
@@ -158,24 +158,24 @@ MessageNotify(
             if (outputBufferLength >= sizeof(ALERT_DATA)) {
                 RtlCopyMemory(outputBuffer, &alertEntry->Alert, sizeof(ALERT_DATA));
                 *returnOutputBufferLength = sizeof(ALERT_DATA);
-                DbgPrint("Integrity Guardians AntiRansomware: Send alert to user mode. File: %wS\n", alertEntry->Alert.FilePath);
+                DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,"Integrity Guardians AntiRansomware: Send alert to user mode. File: %wS\n", alertEntry->Alert.FilePath);
             }
             else {
                 status = STATUS_BUFFER_TOO_SMALL;
-                DbgPrint("Integrity Guardians AntiRansomware: Output buffer too small for alert.\n");
+                DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,"Integrity Guardians AntiRansomware: Output buffer too small for alert.\n");
             }
 
             ExFreePoolWithTag(alertEntry, TAG_ALERT); 
         }
         else {
-            DbgPrint("Integrity Guardians AntiRansomware: Alert queue empty.\n");
+            DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,"Integrity Guardians AntiRansomware: Alert queue empty.\n");
             status = STATUS_NO_MORE_ENTRIES; 
         }
 
         ExReleasePushLockExclusive(&g_driverContext.AlertQueueLock);
     }
     else {
-        DbgPrint("Integrity Guardians AntiRansomware: Output buffer invalid for MessageNotifyCallback.\n");
+        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,"Integrity Guardians AntiRansomware: Output buffer invalid for MessageNotifyCallback.\n");
         status = STATUS_INVALID_PARAMETER;
     }
 
@@ -196,7 +196,7 @@ AlertToUserMode(
         POOL_FLAG_NON_PAGED, sizeof(ALERT_DATA_ENTRY), TAG_ALERT);
 
     if (!alertEntry) {
-        DbgPrint("Integrity Guardians AntiRansomware: Failed to allocate memory for alert.\n");
+        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,"Integrity Guardians AntiRansomware: Failed to allocate memory for alert.\n");
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
@@ -219,7 +219,7 @@ AlertToUserMode(
     InsertTailList(&g_driverContext.AlertQueue, &alertEntry->ListEntry);
     ExReleasePushLockExclusive(&g_driverContext.AlertQueueLock);
 
-    DbgPrint("Integrity Guardians AntiRansomware: Alert queued for %wS.\n", fileName->Buffer);
+    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,"Integrity Guardians AntiRansomware: Alert queued for %wS.\n", fileName->Buffer);
 
     // se for possivel, irei criar uma logica com envio assincrono ou talvez uma thread de worker
 	// para envio imediato ao modo de usuario
