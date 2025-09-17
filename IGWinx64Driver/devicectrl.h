@@ -15,6 +15,18 @@ VOID
 CleanDeviceControl(VOID);
 
 NTSTATUS
+DeviceCreate(
+	_In_ PDEVICE_OBJECT deviceObject,
+	_Inout_ PIRP irp
+);
+
+NTSTATUS
+DeviceClose(
+	_In_ PDEVICE_OBJECT deviceObject,
+	_Inout_ PIRP irp
+);
+
+NTSTATUS
 DeviceControl(
 	_In_ PDEVICE_OBJECT deviceObject,
 	_Inout_ PIRP irp
