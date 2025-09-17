@@ -32,4 +32,9 @@ IsPathMonitored(
     _In_ PUNICODE_STRING pathName
 );
 
+// funcao para verificar extensao suspeita
+BOOLEAN
+IsSuspiciousExtension(
+    _In_ PUNICODE_STRING fileName
+);
 #endif // !DETECTION_H

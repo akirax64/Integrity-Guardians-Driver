@@ -20,7 +20,14 @@ CleanFilter(VOID);
 NTSTATUS FLTAPI
 FilterUnload(
 	_In_ FLT_FILTER_UNLOAD_FLAGS flags
-);
+) {
+
+	if (g_FilterHandle) {
+		FltUnregisterFilter(g_FilterHandle);
+		g_FilterHandle = NULL;
+	}
+	return STATUS_SUCCESS;
+}
 
 // callbacks de pré e pos-operação
 FLT_PREOP_CALLBACK_STATUS

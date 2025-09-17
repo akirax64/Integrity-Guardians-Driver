@@ -6,7 +6,7 @@
 #include <ntstrsafe.h>
 
 // identificador único para o nosso driver para comunicação com o user mode.
-#define DEVICE_ID 0x8000
+#define DEVICE_ID 0x800
 
 // link simbólico para comunicação com o user mode
 #define DEVICE_NAME     L"\\Device\\IGAntiRansomware"
@@ -40,5 +40,8 @@
 #define TAG_BACKUP      'BCKP'
 
 #define RULE_FLAG_MATCH  0x01
+
+// tamanho máximo para leitura de arquivos para escaneamento
+#define MAX_SCAN_LENGTH (1024 * 1024)
 
 #endif

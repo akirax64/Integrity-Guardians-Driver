@@ -16,6 +16,22 @@ typedef struct RULE_INFO {
     // adicionar outros campos conforme necessário, como expressões regulares, etc.
 } RULE_INFO, * PTR_RULE_INFO;
 
+
+// Estrutura para cabeçalho serializado (deve corresponder ao user-mode)
+#pragma pack(push, 1)
+typedef struct SERIALIZED_RULE_HEADER {
+    ULONG   Id;
+    ULONG  Flags;
+    USHORT RuleNameLength;
+    ULONG  PatternLength;
+} SERIALIZED_RULE_HEADER, * PTR_SERIALIZED_RULE_HEADER;
+#pragma pack(pop)
+
+// Estrutura do cabeçalho dos dados
+typedef struct RULES_DATA_HEADER {
+    ULONG NumberOfRules;
+} RULES_DATA_HEADER, * PTR_RULES_DATA_HEADER;
+
 // Estrutura para passar múltiplas regras do user mode
 typedef struct RULES_DATA {
     ULONG         NumberOfRules;
@@ -45,7 +61,7 @@ typedef struct IS_MONITORED_PATH_INFO {
     BOOLEAN        IsExcluded;
 } IS_MONITORED_PATH_INFO, * PTR_IS_MONITORED_PATH_INFO;
 
-// conexto do driver, contendo todos os recursos necessários
+// contexto do driver, contendo todos os recursos necessários
 // o tipo EX_PUSH_LOCK é usado para proteger o acesso a listas e filas
 typedef struct DRIVER_CONTEXT {
     PFLT_PORT   ClientPort;

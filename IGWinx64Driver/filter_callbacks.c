@@ -2,6 +2,7 @@
 #include "fltcallbacks.h"
 #include "detection.h"
 #include "globals.h"
+#include "mitigation.h"
 
 CONST FLT_OPERATION_REGISTRATION Callbacks[] = {
     { IRP_MJ_CREATE, 0, InPreCreate, InPostCreate },
@@ -66,9 +67,9 @@ FilterUnload(
 {
     UNREFERENCED_PARAMETER(flags); // Evita avisos de parâmetro não utilizado
     DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,"Integrity Guardians AntiRansomware: Stub function FilterUnload called.");
-    // Nenhum acesso a memória, nenhuma operação de E/S, nenhuma lógica complexa.
-    // Apenas retorna.
-	return STATUS_SUCCESS; // Indica que o filtro foi descarregado com sucesso    
+    
+	CleanFilter(); // Limpa o filter manager
+	return STATUS_SUCCESS;    
 }
 
 // funcao de pré-criação de arquivos
@@ -86,12 +87,30 @@ InPreCreate(
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
-	// nome do arquivo sendo criado
-    PUNICODE_STRING fileName = &data->Iopb->TargetFileObject->FileName;
-    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,"Integrity Guardians AntiRansomware: PreCreate - File: %wZ\n", fileName);
+    __try {
+        PUNICODE_STRING fileName = &data->Iopb->TargetFileObject->FileName;
 
-	// implementar lógica de detecção de criação de arquivos suspeitos (detection.c)
-    // if ( IsSuspiciousFileCreation(Data)) { ... }
+        if (!MmIsAddressValid(fileName) || !MmIsAddressValid(fileName->Buffer)) {
+            return FLT_PREOP_SUCCESS_NO_CALLBACK;
+        }
+
+        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,
+            "PreCreate - File: %wZ\n", fileName);
+
+		// bloquear criação de arquivos com extensões suspeitas
+        if (IsSuspiciousExtension(fileName)) {
+            DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,
+                "BLOCKING suspicious file creation: %wZ\n", fileName);
+
+            BlockSuspiciousOperation(data, STATUS_ACCESS_DENIED);
+            return FLT_PREOP_COMPLETE;
+        }
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL,
+            "EXCEPTION in InPreCreate: 0x%X\n", GetExceptionCode());
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
 
     return FLT_PREOP_SUCCESS_NO_CALLBACK;
 }
@@ -131,38 +150,77 @@ InPreWrite(
     UNREFERENCED_PARAMETER(f_Objects);
     UNREFERENCED_PARAMETER(context);
 
-	// se o monitoramento não estiver habilitado, finaliza a operação
-    if (!g_driverContext.MonitoringEnabled) {
+	// verificar se o monitoramento está habilitado
+    if (!g_driverContext.MonitoringEnabled || !g_driverContext.RulesListLock) {
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
-	// variáveis locais para armazenar informações sobre a operação de escrita
+	// vendo se está em um IRQL acima de APC_LEVEL, para retornar imediatamente (se for true)
+    if (KeGetCurrentIrql() > APC_LEVEL) {
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
+
     PFLT_IO_PARAMETER_BLOCK iopb = data->Iopb;
     PVOID writeBuffer = NULL;
     ULONG length = iopb->Parameters.Write.Length;
-    PUNICODE_STRING fileName = &data->Iopb->TargetFileObject->FileName;
+    PUNICODE_STRING fileName = NULL;
 
-    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,"Integrity Guardians AntiRansomware: PreWrite - File: %wZ, Length: %lu\n",
-        fileName, length);
+    __try {
+        fileName = &data->Iopb->TargetFileObject->FileName;
+        if (!MmIsAddressValid(fileName) || !MmIsAddressValid(fileName->Buffer)) {
+            DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL,
+                "Invalid fileName address in InPreWrite\n");
+            return FLT_PREOP_SUCCESS_NO_CALLBACK;
+        }
 
-	if (length == 0) { // se nao há dados para escrever, finaliza a operação
+        if (length == 0) {
+            return FLT_PREOP_SUCCESS_NO_CALLBACK;
+        }
+
+        if (!iopb->Parameters.Write.MdlAddress) {
+            return FLT_PREOP_SUCCESS_NO_CALLBACK;
+        }
+
+        writeBuffer = MmGetSystemAddressForMdlSafe(iopb->Parameters.Write.MdlAddress, NormalPagePriority);
+        if (writeBuffer == NULL) {
+            return FLT_PREOP_SUCCESS_NO_CALLBACK;
+        }
+
+        // 7. Verificar se o buffer é acessível
+        if (!MmIsAddressValid(writeBuffer)) {
+            return FLT_PREOP_SUCCESS_NO_CALLBACK;
+        }
+
+        ULONG scanLength = min(length, MAX_SCAN_LENGTH);
+
+        BOOLEAN detected = FALSE;
+        detected = ScanBuffer(writeBuffer, scanLength, fileName, IoGetCurrentProcess());
+
+        if (detected) {
+            DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,
+                "BLOCKING suspicious write to %wZ\n", fileName);
+
+            // Fazer backup apenas se estivermos em IRQL PASSIVE
+            if (KeGetCurrentIrql() == PASSIVE_LEVEL && g_driverContext.BackupOnDetection) {
+                NTSTATUS backupStatus = BackupFile(data->Iopb->TargetFileObject, fileName, f_Objects->Instance);
+                if (!NT_SUCCESS(backupStatus)) {
+                    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL,
+                        "Backup failed for %wZ: 0x%X\n", fileName, backupStatus);
+                }
+            }
+
+            BlockSuspiciousOperation(data, STATUS_ACCESS_DENIED);
+            return FLT_PREOP_COMPLETE;
+        }
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL,
+            "EXCEPTION in InPreWrite for file: 0x%p, Code: 0x%X\n",
+            fileName, GetExceptionCode());
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
-	// condicional para verificar se o MdlAddress é válido
-	// prevenindo bug checks ao acessar um endereço nulo ou inválido
-    if (!iopb->Parameters.Write.MdlAddress) {
-        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Integrity Guardians AntiRansomware: MdlAddress is NULL or invalid. Skipping write buffer scan for %wZ.\n", fileName);
-        return FLT_PREOP_SUCCESS_NO_CALLBACK;
-    }
-
-    writeBuffer = MmGetSystemAddressForMdlSafe(iopb->Parameters.Write.MdlAddress, HighPagePriority);
-    if (writeBuffer == NULL) {
-        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Integrity Guardians AntiRansomware: Failed to get write buffer for %wZ\n", fileName);
-        return FLT_PREOP_SUCCESS_NO_CALLBACK;
-    }
-
-	return FLT_PREOP_SUCCESS_NO_CALLBACK; // Permite a operação se não for detectado
+    return FLT_PREOP_SUCCESS_NO_CALLBACK;
 }
 
 // função de pós-escrita de arquivos
