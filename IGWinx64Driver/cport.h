@@ -43,6 +43,13 @@ MessageNotify(
     _Out_ PULONG returnOutputBufferLength
 );
 
+NTSTATUS
+GetAlert(
+    _Out_ PVOID outputBuffer,
+    _In_ ULONG outputBufferLength,
+    _Out_ PULONG bytesReturned
+);
+
 // enviar um alerta para o usuario sobre ameaça detectada
 NTSTATUS
 AlertToUserMode(

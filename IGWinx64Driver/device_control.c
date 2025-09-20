@@ -2,7 +2,8 @@
 #include "globals.h" 
 #include "antirnsm.h"       
 #include "rules.h" 
-#include "cport.h"      
+#include "cport.h"
+#include "detection.c"
 
 UNICODE_STRING g_DeviceName = RTL_CONSTANT_STRING(DEVICE_NAME);
 UNICODE_STRING g_DosDeviceName = RTL_CONSTANT_STRING(DOS_DEVICE_NAME);
@@ -205,6 +206,45 @@ DeviceControl(
 			bytesInfo = 0;
 			DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Integrity Guardians AntiRansomware: IOCTL_STATUS - Buffer de saída inválido (tamanho %lu).\n", outputBufferLength);
 		}
+	case IOCTL_ADD_EXCLUDED_PATH:
+		if (inputBuffer && inputBufferLength >= sizeof(UNICODE_STRING)) {
+			PUNICODE_STRING path = (PUNICODE_STRING)inputBuffer;
+			status = IsPathExcluded(path);
+			if (NT_SUCCESS(status)) {
+				DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,
+					"Added to whitelist: %wZ\n", path);
+			}
+		}
+		else {
+			status = STATUS_INVALID_PARAMETER;
+		}
+		break;
+	case IOCTL_REMOVE_EXCLUDED_PATH:
+		if (inputBuffer && inputBufferLength >= sizeof(UNICODE_STRING)) {
+			PUNICODE_STRING path = (PUNICODE_STRING)inputBuffer;
+			status = RemoveExcludedPath(path);
+			if (NT_SUCCESS(status)) {
+				DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,
+					"Removed from whitelist: %wZ\n", path);
+			}
+		}
+		else {
+			status = STATUS_INVALID_PARAMETER;
+		}
+		break;
+
+	case IOCTL_GET_EXCLUDED_PATHS:
+		// Implementar se necessário para debug
+		status = STATUS_NOT_IMPLEMENTED;
+		break;
+
+	case IOCTL_CLEAR_EXCLUDED_PATHS:
+		status = ClearExcludedPaths();
+		if (NT_SUCCESS(status)) {
+			DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,
+				"Whitelist cleared\n");
+		}
+		break;
 		break;
 
 		// Handlers para IRPs de CREATE e CLOSE (se o user-mode abrir/fechar o handle do dispositivo).
