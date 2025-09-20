@@ -3,7 +3,9 @@
 #include "antirnsm.h"       
 #include "rules.h" 
 #include "cport.h"
-#include "detection.c"
+#include "safechk.h"
+#include "detection.h"
+#include "whitelist.h"
 
 UNICODE_STRING g_DeviceName = RTL_CONSTANT_STRING(DEVICE_NAME);
 UNICODE_STRING g_DosDeviceName = RTL_CONSTANT_STRING(DOS_DEVICE_NAME);
@@ -160,7 +162,7 @@ DeviceControl(
 	case IOCTL_GET_ALERT:
 		// processa o IOCTL para obter alertas do driver
 		if (outputBuffer && outputBufferLength >= sizeof(ALERT_DATA)) {
-			//status = GetAlert(outputBuffer, outputBufferLength, (PULONG)&bytesInfo); //implmentar a função GetAlert
+			status = GetAlert(outputBuffer, outputBufferLength, (PULONG)&bytesInfo);
 		}
 		else {
 			status = STATUS_INVALID_PARAMETER;
@@ -206,45 +208,96 @@ DeviceControl(
 			bytesInfo = 0;
 			DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Integrity Guardians AntiRansomware: IOCTL_STATUS - Buffer de saída inválido (tamanho %lu).\n", outputBufferLength);
 		}
+		break;
+
 	case IOCTL_ADD_EXCLUDED_PATH:
-		if (inputBuffer && inputBufferLength >= sizeof(UNICODE_STRING)) {
-			PUNICODE_STRING path = (PUNICODE_STRING)inputBuffer;
-			status = IsPathExcluded(path);
-			if (NT_SUCCESS(status)) {
-				DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,
-					"Added to whitelist: %wZ\n", path);
+	{
+		__try {
+			if (inputBuffer && inputBufferLength >= sizeof(UNICODE_STRING)) {
+				PUNICODE_STRING path = (PUNICODE_STRING)inputBuffer;
+
+				// Verificação segura do buffer
+				SAFE_ACCESS(path, sizeof(UNICODE_STRING), {
+					if (path->Buffer && path->Length > 0) {
+						status = AddExcludedPath(path);
+						if (NT_SUCCESS(status)) {
+							DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,
+								"Whitelist: Added path %wZ\n", path);
+						}
+					}
+					});
+			}
+			else {
+				status = STATUS_INVALID_PARAMETER;
 			}
 		}
-		else {
-			status = STATUS_INVALID_PARAMETER;
+		__except (EXCEPTION_EXECUTE_HANDLER) {
+			status = GetExceptionCode();
+			DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL,
+				"IOCTL_ADD_EXCLUDED_PATH exception: 0x%X\n", status);
 		}
 		break;
+	}
 	case IOCTL_REMOVE_EXCLUDED_PATH:
-		if (inputBuffer && inputBufferLength >= sizeof(UNICODE_STRING)) {
-			PUNICODE_STRING path = (PUNICODE_STRING)inputBuffer;
-			status = RemoveExcludedPath(path);
-			if (NT_SUCCESS(status)) {
-				DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,
-					"Removed from whitelist: %wZ\n", path);
+	{
+		__try {
+			if (inputBuffer && inputBufferLength >= sizeof(UNICODE_STRING)) {
+				PUNICODE_STRING path = (PUNICODE_STRING)inputBuffer;
+
+				SAFE_ACCESS(path, sizeof(UNICODE_STRING), {
+					status = RemoveExcludedPath(path);
+					if (NT_SUCCESS(status)) {
+						DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,
+							"Whitelist: Removed path %wZ\n", path);
+					}
+					});
+			}
+			else {
+				status = STATUS_INVALID_PARAMETER;
 			}
 		}
-		else {
-			status = STATUS_INVALID_PARAMETER;
+		__except (EXCEPTION_EXECUTE_HANDLER) {
+			status = GetExceptionCode();
+			DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL,
+				"IOCTL_REMOVE_EXCLUDED_PATH exception: 0x%X\n", status);
 		}
 		break;
-
+	}
 	case IOCTL_GET_EXCLUDED_PATHS:
-		// Implementar se necessário para debug
-		status = STATUS_NOT_IMPLEMENTED;
-		break;
-
-	case IOCTL_CLEAR_EXCLUDED_PATHS:
-		status = ClearExcludedPaths();
-		if (NT_SUCCESS(status)) {
-			DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,
-				"Whitelist cleared\n");
+	{
+		__try {
+			if (outputBuffer && outputBufferLength >= sizeof(ULONG)) {
+				// Retorna apenas o count por enquanto
+				PULONG count = (PULONG)outputBuffer;
+				*count = GetExcludedPathsCount();
+				bytesInfo = sizeof(ULONG);
+				status = STATUS_SUCCESS;
+			}
+			else {
+				status = STATUS_BUFFER_TOO_SMALL;
+			}
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER) {
+			status = GetExceptionCode();
+			DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL,
+				"IOCTL_GET_EXCLUDED_PATHS exception: 0x%X\n", status);
 		}
 		break;
+	}
+	case IOCTL_CLEAR_EXCLUDED_PATHS:
+	{
+		__try {
+			status = ClearExcludedPaths();
+			if (NT_SUCCESS(status)) {
+				DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,
+					"Whitelist: All paths cleared\n");
+			}
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER) {
+			status = GetExceptionCode();
+			DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL,
+				"IOCTL_CLEAR_EXCLUDED_PATHS exception: 0x%X\n", status);
+		}
 		break;
 
 		// Handlers para IRPs de CREATE e CLOSE (se o user-mode abrir/fechar o handle do dispositivo).
@@ -272,4 +325,4 @@ DeviceControl(
 
 	DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Integrity Guardians AntiRansomware: DeviceControl completed with status 0x%X\n", status);
 	return status;
-}
+	}
