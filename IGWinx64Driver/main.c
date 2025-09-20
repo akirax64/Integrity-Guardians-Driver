@@ -13,10 +13,7 @@ CONST GUID MiniFilterGuid = {
     0x5b3d6048, 0xf852, 0x4fe2, { 0x9a, 0xb6, 0x5a, 0xdd, 0xa8, 0x5d, 0xaf, 0x55 }
 };
 
-
-// --- Estrutura de Registro do Filtro ---
-// Esta estrutura define as informações de registro do seu minifiltro.
-// As funções referenciadas aqui são implementadas em filter_callbacks.c.
+// estrutura que registra o minifiltro e seus callbacks
 const FLT_REGISTRATION FilterRegistration = {
     sizeof(FLT_REGISTRATION),
     FLT_REGISTRATION_VERSION,
@@ -36,8 +33,7 @@ const FLT_REGISTRATION FilterRegistration = {
     NULL // NormalizeNameComponentCallback
 };
 
-
-// Em main.c, na sua DriverEntry
+// ponto de entrada do driver
 NTSTATUS
 DriverEntry(
     _In_ PDRIVER_OBJECT DriverObject,
@@ -97,8 +93,7 @@ DriverEntry(
     return STATUS_SUCCESS;
 }
 
-
-// --- DriverUnload (Ponto de Saída do Driver) ---
+// descarrega o driver e limpa os recursos alocados
 VOID
 DriverUnload(
     _In_ PDRIVER_OBJECT DriverObject
@@ -120,6 +115,5 @@ DriverUnload(
 
     FreeRulesList(); // Libera a memória alocada para as regras.
    
-
     DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,"Integrity Guardians AntiRansomware: DriverUnload finished.\n");
 }
