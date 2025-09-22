@@ -1,5 +1,7 @@
 #ifndef RULES_H
 #define RULES_H
+
+#pragma once
 #include <fltKernel.h> 
 #include "antirnsm.h"   
 
@@ -13,10 +15,5 @@ LoadRules(
 // limpar a memoria usada para as regras carregadas
 VOID
 FreeRulesList(VOID);
-
-// Funções para gerenciar listas de caminhos monitorados/excluídos (opcional, pode ser implementado mais tarde)
-// NTSTATUS ArLoadMonitoredPaths(_In_ PTR_PATH_MONITOR_INFO PathsData, _In_ ULONG PathsDataLength);
-// NTSTATUS ArLoadExcludedPaths(_In_ PTR_PATH_MONITOR_INFO PathsData, _In_ ULONG PathsDataLength);
-// VOID ArFreePathsList(_Inout_ PLIST_ENTRY ListHead, _In_ PEX_PUSH_LOCK Lock);
 
 #endif // RULES_H

@@ -1,10 +1,9 @@
 #ifndef DETECTION_H
 #define DETECTION_H
 
+#pragma once
 #include "antirnsm.h"
 #include <fltKernel.h>
-
-#pragma once
 
 BOOLEAN
 ScanBuffer(
@@ -23,7 +22,7 @@ ScanFileContent(
 
 // funcoes para exclusao e monitoramento de caminho
 BOOLEAN
-IsPathExcluded(
+IsPathExcludedFromDetection(
     _In_ PUNICODE_STRING pathName
 );
 

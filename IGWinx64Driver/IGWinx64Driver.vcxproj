@@ -32,8 +32,11 @@
     <ClInclude Include="globals.h" />
     <ClInclude Include="main.h" />
     <ClInclude Include="mitigation.h" />
+    <ClInclude Include="precompiled.h" />
     <ClInclude Include="rules.h" />
+    <ClInclude Include="safechk.h" />
     <ClInclude Include="Trace.h" />
+    <ClInclude Include="whitelist.h" />
   </ItemGroup>
   <ItemGroup>
     <Inf Include="IGWinx64Driver.inf" />
@@ -162,6 +165,7 @@
     <ClCompile Include="main.c" />
     <ClCompile Include="mitigation.c" />
     <ClCompile Include="rules.c" />
+    <ClCompile Include="whitelist.c" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

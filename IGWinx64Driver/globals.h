@@ -1,10 +1,10 @@
 #ifndef GLOBALS_H
 #define GLOBALS_H
 
+#pragma once
+
 #include "antirnsm.h"
 #include "enum.h"
-
-#pragma once
 
 // variaveis globais
 extern PFLT_FILTER g_FilterHandle;

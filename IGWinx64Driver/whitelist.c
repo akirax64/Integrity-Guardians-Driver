@@ -1,9 +1,4 @@
-#include <ntddk.h>
-#include <wdm.h>
-#include <ntstrsafe.h>
-#include "whitelist.h"
-#include "globals.h"
-#include "safechk.h"
+#include "precompiled.h"
 
 // whitelist paths
 static UNICODE_STRING g_DefaultWhitelist[] = {

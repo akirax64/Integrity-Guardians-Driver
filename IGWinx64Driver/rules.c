@@ -1,7 +1,4 @@
-#include "rules.h"
-#include "globals.h" 
-#include "enum.h"           
-#include <ntstrsafe.h>      
+#include "precompiled.h"   
 
 // vai liberar a memória de todas as regras carregadas
 VOID

@@ -1,13 +1,4 @@
-#include "antirnsm.h"
-#include "fltcallbacks.h"
-#include "cport.h"
-#include "main.h"
-#include "enum.h"
-#include "globals.h"
-#include "rules.h"
-#include "devicectrl.h"
-
-#include <fltKernel.h>
+#include "precompiled.h"
 
 CONST GUID MiniFilterGuid = {
     0x5b3d6048, 0xf852, 0x4fe2, { 0x9a, 0xb6, 0x5a, 0xdd, 0xa8, 0x5d, 0xaf, 0x55 }
@@ -89,7 +80,15 @@ DriverEntry(
         return status;
     }
 
-    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,"Integrity Guardians AntiRansomware: DriverEntry finished successfully.\n");
+    status = InitializeWhitelist();
+    if (!NT_SUCCESS(status)) {
+        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL,
+            "Warning: Whitelist initialization failed: 0x%X\n", status);
+        // não vai falhar o driver, continua sem whitelist
+    }
+
+    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,
+        "Driver loaded successfully with whitelist support\n");
     return STATUS_SUCCESS;
 }
 

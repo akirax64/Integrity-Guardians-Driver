@@ -1,8 +1,4 @@
-#include "antirnsm.h"
-#include "fltcallbacks.h"
-#include "detection.h"
-#include "globals.h"
-#include "mitigation.h"
+#include "precompiled.h"
 
 CONST FLT_OPERATION_REGISTRATION Callbacks[] = {
     { IRP_MJ_CREATE, 0, InPreCreate, InPostCreate },
@@ -65,11 +61,25 @@ FilterUnload(
     _In_ FLT_FILTER_UNLOAD_FLAGS flags
 )
 {
-    UNREFERENCED_PARAMETER(flags); // Evita avisos de parâmetro não utilizado
-    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,"Integrity Guardians AntiRansomware: Stub function FilterUnload called.");
-    
-	CleanFilter(); // Limpa o filter manager
-	return STATUS_SUCCESS;    
+    UNREFERENCED_PARAMETER(flags);
+
+    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,
+        "Integrity Guardians AntiRansomware: FilterUnload called. Flags: 0x%X\n", flags);
+
+    CleanFilter();
+
+    CleanCommunicationPort();
+
+    CleanDeviceControl();
+
+    FreeRulesList();
+
+    ClearExcludedPaths();
+
+    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,
+        "Integrity Guardians AntiRansomware: Filter unloaded successfully.\n");
+
+    return STATUS_SUCCESS;
 }
 
 // funcao de pré-criação de arquivos
