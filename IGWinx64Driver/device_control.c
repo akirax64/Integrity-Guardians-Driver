@@ -1,11 +1,4 @@
-#include "devicectrl.h"
-#include "globals.h" 
-#include "antirnsm.h"       
-#include "rules.h" 
-#include "cport.h"
-#include "safechk.h"
-#include "detection.h"
-#include "whitelist.h"
+#include "precompiled.h"
 
 UNICODE_STRING g_DeviceName = RTL_CONSTANT_STRING(DEVICE_NAME);
 UNICODE_STRING g_DosDeviceName = RTL_CONSTANT_STRING(DOS_DEVICE_NAME);
@@ -116,8 +109,7 @@ NTSTATUS
 DeviceControl(
 	_In_ PDEVICE_OBJECT deviceObject,
 	_Inout_ PIRP irp
-)
-{
+) {
 	UNREFERENCED_PARAMETER(deviceObject);
 
 	NTSTATUS status = STATUS_SUCCESS;
@@ -299,6 +291,7 @@ DeviceControl(
 				"IOCTL_CLEAR_EXCLUDED_PATHS exception: 0x%X\n", status);
 		}
 		break;
+	}
 
 		// Handlers para IRPs de CREATE e CLOSE (se o user-mode abrir/fechar o handle do dispositivo).
 	case IRP_MJ_CREATE:
@@ -325,4 +318,4 @@ DeviceControl(
 
 	DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Integrity Guardians AntiRansomware: DeviceControl completed with status 0x%X\n", status);
 	return status;
-	}
+}

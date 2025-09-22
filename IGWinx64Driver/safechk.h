@@ -1,12 +1,11 @@
 #ifndef SAFECHK_H
 #define SAFECHK_H
 
-#include <ntddk.h>
+#pragma once
+
 #include <wdm.h>
 #include <fltKernel.h>
 #include <ntstrsafe.h>
-
-#pragma once
 
 // macros para prevencao de bsods ao acessar memoria
 #define SAFE_ACCESS(ptr, size, operation) \
