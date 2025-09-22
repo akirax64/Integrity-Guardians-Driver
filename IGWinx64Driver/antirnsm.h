@@ -54,6 +54,13 @@ typedef struct ALERT_DATA_ENTRY {
     ALERT_DATA Alert;
 } ALERT_DATA_ENTRY, * PTR_ALERT_DATA_ENTRY;
 
+// struct para criacao do contexto do cliente
+typedef struct _CLIENT_CONTEXT {
+    PFLT_PORT ClientPort;
+    LIST_ENTRY ListEntry;
+    BOOLEAN IsActive;
+} CLIENT_CONTEXT, * PTR_CLIENT_CONTEXT;
+
 // Estrutura para monitoramento e exclusão de caminhos
 typedef struct IS_MONITORED_PATH_INFO {
     LIST_ENTRY     ListEntry;
@@ -80,6 +87,9 @@ typedef struct DRIVER_CONTEXT {
     BOOLEAN     MonitoringEnabled;
     ULONG       DetectionMode;
     BOOLEAN     BackupOnDetection;
+
+    LIST_ENTRY  ClientList;           // Lista de clientes conectados
+    EX_PUSH_LOCK ClientListLock;      // Lock para lista de clientes
 
 } DRIVER_CONTEXT, * PTR_DRIVER_CONTEXT;
 

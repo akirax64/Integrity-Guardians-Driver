@@ -1,10 +1,9 @@
 #ifndef COMMUNICATION_PORT_H
 #define COMMUNICATION_PORT_H
 
-#include "antirnsm.h"
-
 #pragma once
 
+#include "antirnsm.h"
 // para inicializar a porta de comunicação
 NTSTATUS
 InitializeCommunicationPort(
@@ -58,5 +57,10 @@ AlertToUserMode(
     _In_ HANDLE threadId,
     _In_ ULONG detectionType,
     _In_ PUNICODE_STRING ruleName
+);
+
+NTSTATUS
+BroadcastAlertToClients(
+    _In_ PTR_ALERT_DATA AlertData
 );
 #endif // !COMMUNICATION_PORT_H
