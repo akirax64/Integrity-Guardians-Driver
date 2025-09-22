@@ -1,6 +1,7 @@
 #ifndef MITIGATION_H
 #define MITIGATION_H
 
+#pragma once
 #include <fltKernel.h>
 
 // funcao para bloquear uma operacao de E/S potencialmente maliciosa
@@ -18,15 +19,21 @@ BackupFile(
     _In_ PFLT_INSTANCE initialInstance
 );
 
+NTSTATUS
+DeleteBackupFile(
+    _In_ PUNICODE_STRING FileName
+);
+
 // finaliza o processo malicioso
 NTSTATUS
 KillMaliciousProcess(
     _In_ PEPROCESS process
 );
 
-// Adicione aqui outros protótipos de funções de mitigação conforme necessário, por exemplo:
-// NTSTATUS ArQuarantineFile(_In_ PFILE_OBJECT FileObject); // Para mover um arquivo para quarentena
-// NTSTATUS ArRollback
+BOOLEAN
+IsSystemProcess(
+    _In_ PEPROCESS process
+);
 
 #endif // !MITIGATION_H
 
