@@ -1,10 +1,10 @@
 #ifndef DEVICE_CONTROL_H
 #define DEVICE_CONTROL_H
 
-#include "antirnsm.h"
-#include <fltKernel.h>
 
 #pragma once
+#include "antirnsm.h"
+
 
 NTSTATUS
 InitializeDeviceControl(
