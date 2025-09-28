@@ -79,4 +79,16 @@ InstanceTeardownComplete(
 	_In_ PCFLT_RELATED_OBJECTS fltObjects,
 	_In_ FLT_INSTANCE_TEARDOWN_FLAGS flags
 );
+
+FLT_PREOP_CALLBACK_STATUS
+ProcessWriteOperation(
+	_Inout_ PFLT_CALLBACK_DATA data,
+	_In_ PCFLT_RELATED_OBJECTS f_Objects
+);
+
+BOOLEAN
+IsWriteOperationSafe(
+	_In_ PFLT_CALLBACK_DATA Data,
+	_In_ KIRQL CurrentIrql
+);
 #endif// !FILTER_CALLBACKS_H

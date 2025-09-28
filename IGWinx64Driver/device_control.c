@@ -2,7 +2,7 @@
 
 UNICODE_STRING g_DeviceName = RTL_CONSTANT_STRING(DEVICE_NAME);
 UNICODE_STRING g_DosDeviceName = RTL_CONSTANT_STRING(DOS_DEVICE_NAME);
-// Inicializa o objeto de dispositivo e o link simbólico para comunicação com o user-mode.
+
 NTSTATUS
 InitializeDeviceControl(
 	_In_ PDRIVER_OBJECT driverObject
@@ -14,7 +14,6 @@ InitializeDeviceControl(
 
 	DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "IGAR: Initializing Device Control...\n");
 
-	// Criando o objeto de dispositivo.
 	status = IoCreateDevice(
 		driverObject,
 		0,
@@ -24,38 +23,36 @@ InitializeDeviceControl(
 		FALSE,
 		&g_DeviceObject
 	);
+
 	if (!NT_SUCCESS(status)) {
-		DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Integrity Guardians AntiRansomware: Failed to create device object (0x%X)\n", status);
+		DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL,
+			"IGAR: Failed to create device object (0x%X)\n", status);
 		return status;
 	}
 
-	// Configura os handlers para os IRPs de controle do dispositivo.
-	// IRP_MJ_CREATE e IRP_MJ_CLOSE são direcionados para DeviceControl para gerenciar handles do dispositivo.
 	driverObject->MajorFunction[IRP_MJ_CREATE] = DeviceCreate;
 	driverObject->MajorFunction[IRP_MJ_CLOSE] = DeviceClose;
 	driverObject->MajorFunction[IRP_MJ_DEVICE_CONTROL] = DeviceControl;
 
-	// Criando o link simbólico (DosDeviceName) para que o user-mode possa acessá-lo.
 	status = IoCreateSymbolicLink(&g_DosDeviceName, &g_DeviceName);
 	if (!NT_SUCCESS(status)) {
-		DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Integrity Guardians AntiRansomware: Failed to create symbolic link (0x%X)\n", status);
-		// Em caso de falha, limpa o objeto de dispositivo já criado.
+		DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL,
+			"IGAR: Failed to create symbolic link (0x%X)\n", status);
 		IoDeleteDevice(g_DeviceObject);
 		g_DeviceObject = NULL;
 		return status;
 	}
 
-	DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Integrity Guardians AntiRansomware: Device Control initialized successfully.\n");
+	DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "IGAR: Device Control initialized successfully.\n");
 	return STATUS_SUCCESS;
 }
 
-// limpeza do controle de dispositivo
 VOID
 CleanDeviceControl(VOID)
 {
 	PAGED_CODE();
 
-	DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Integrity Guardians AntiRansomware: Cleaning up Device Control...\n");
+	DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "IGAR: Cleaning up Device Control...\n");
 
 	IoDeleteSymbolicLink(&g_DosDeviceName);
 
@@ -64,10 +61,8 @@ CleanDeviceControl(VOID)
 		g_DeviceObject = NULL;
 	}
 
-	DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Integrity Guardians AntiRansomware: Device Control cleaned up.\n");
+	DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "IGAR: Device Control cleaned up.\n");
 }
-
-// controle de dispositivo por meio de IOCTLs
 
 NTSTATUS
 DeviceCreate(
@@ -77,9 +72,6 @@ DeviceCreate(
 {
 	UNREFERENCED_PARAMETER(deviceObject);
 
-	// DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,"Integrity Guardians AntiRansomware: DeviceCreate called.\n");
-
-	// Completa a requisição com sucesso.
 	irp->IoStatus.Status = STATUS_SUCCESS;
 	irp->IoStatus.Information = 0;
 	IoCompleteRequest(irp, IO_NO_INCREMENT);
@@ -95,9 +87,8 @@ DeviceClose(
 {
 	UNREFERENCED_PARAMETER(deviceObject);
 
-	DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Integrity Guardians AntiRansomware: DeviceClose called.\n");
+	DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "IGAR: DeviceClose called.\n");
 
-	// Completa a requisição com sucesso.
 	irp->IoStatus.Status = STATUS_SUCCESS;
 	irp->IoStatus.Information = 0;
 	IoCompleteRequest(irp, IO_NO_INCREMENT);
@@ -105,11 +96,38 @@ DeviceClose(
 	return STATUS_SUCCESS;
 }
 
+// Função auxiliar para validar buffer do user mode
+__forceinline
+BOOLEAN
+ValidateUserBuffer(
+	_In_ PVOID Buffer,
+	_In_ ULONG BufferLength
+)
+{
+	if (Buffer == NULL || BufferLength == 0) {
+		return FALSE;
+	}
+
+	// Verificação básica de sanidade sem ProbeForRead
+	__try {
+		// Teste simples de acesso de leitura
+		volatile UCHAR testByte = *((volatile PUCHAR)Buffer);
+		UNREFERENCED_PARAMETER(testByte);
+		return TRUE;
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER) {
+		DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL,
+			"ValidateUserBuffer: Exception 0x%X\n", GetExceptionCode());
+		return FALSE;
+	}
+}
+
 NTSTATUS
 DeviceControl(
 	_In_ PDEVICE_OBJECT deviceObject,
 	_Inout_ PIRP irp
-) {
+)
+{
 	UNREFERENCED_PARAMETER(deviceObject);
 
 	NTSTATUS status = STATUS_SUCCESS;
@@ -121,201 +139,246 @@ DeviceControl(
 	ULONG outputBufferLength;
 	ULONG_PTR bytesInfo = 0;
 
-	PAGED_CODE(); // funcao roda em PASSIVE_LEVEL
+	PAGED_CODE();
+
 	DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "IGAR: DeviceControl called.\n");
 
 	irpStack = IoGetCurrentIrpStackLocation(irp);
-
-	// determina o IOCTL recebido
 	ioControlCode = irpStack->Parameters.DeviceIoControl.IoControlCode;
 
-	// criacao de buffers de I/O para propriedade METHOD_BUFFERED
 	inputBuffer = irp->AssociatedIrp.SystemBuffer;
 	inputBufferLength = irpStack->Parameters.DeviceIoControl.InputBufferLength;
 	outputBuffer = irp->AssociatedIrp.SystemBuffer;
 	outputBufferLength = irpStack->Parameters.DeviceIoControl.OutputBufferLength;
 
-	DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Integrity Guardians AntiRansomware: DeviceControl - IOCTL 0x%X received\n", ioControlCode);
-	DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Integrity Guardians AntiRansomware: Expected IOCTL_CONFIGURE_MONITORING: 0x%X\n", IOCTL_CONFIGURE_MONITORING);
+	DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "IGAR: IOCTL 0x%X, Input: %lu, Output: %lu\n",
+		ioControlCode, inputBufferLength, outputBufferLength);
 
 	switch (ioControlCode)
 	{
 	case IOCTL_LOAD_RULES:
-		// Recebe o IOCTL para carregar regras de política do user-mode
-		if (inputBuffer && inputBufferLength > 0) {
+	{
+		if (!ValidateUserBuffer(inputBuffer, inputBufferLength) || inputBufferLength < sizeof(RULES_DATA_HEADER)) {
+			status = STATUS_INVALID_PARAMETER;
+			DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "IOCTL_LOAD_RULES: Invalid buffer\n");
+			break;
+		}
+
+		__try {
 			status = LoadRules(inputBuffer, inputBufferLength);
-			bytesInfo = (ULONG_PTR)inputBufferLength;
+			if (NT_SUCCESS(status)) {
+				bytesInfo = inputBufferLength;
+			}
 		}
-		else {
-			status = STATUS_INVALID_PARAMETER;
-			DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Integrity Guardians AntiRansomware: IOCTL_LOAD_RULES - Invalid input buffer.\n");
+		__except (EXCEPTION_EXECUTE_HANDLER) {
+			status = GetExceptionCode();
+			DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL,
+				"IOCTL_LOAD_RULES: Exception 0x%X\n", status);
 		}
 		break;
+	}
+
 	case IOCTL_GET_ALERT:
-		// processa o IOCTL para obter alertas do driver
-		if (outputBuffer && outputBufferLength >= sizeof(ALERT_DATA)) {
-			status = GetAlert(outputBuffer, outputBufferLength, (PULONG)&bytesInfo);
+	{
+		if (outputBufferLength < sizeof(ALERT_DATA)) {
+			status = STATUS_BUFFER_TOO_SMALL;
+			bytesInfo = sizeof(ALERT_DATA);
+			break;
 		}
-		else {
+
+		if (!ValidateUserBuffer(outputBuffer, outputBufferLength)) {
 			status = STATUS_INVALID_PARAMETER;
-			bytesInfo = 0;
-			DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Integrity Guardians AntiRansomware: IOCTL_GET_ALERT - Invalid output buffer (length %lu).\n", outputBufferLength);
+			break;
 		}
+
+		status = GetAlert(outputBuffer, outputBufferLength, (PULONG)&bytesInfo);
 		break;
+	}
 
 	case IOCTL_CONFIGURE_MONITORING:
-		if (inputBuffer && inputBufferLength >= sizeof(MONITORING_CONFIG)) {
+	{
+		if (!ValidateUserBuffer(inputBuffer, inputBufferLength) ||
+			inputBufferLength < sizeof(MONITORING_CONFIG)) {
+			status = STATUS_INVALID_PARAMETER;
+			break;
+		}
+
+		__try {
 			PTR_MONITORING_CONFIG config = (PTR_MONITORING_CONFIG)inputBuffer;
+
+			// Validação adicional dos valores
+			if (config->Mode > DetectionModeMonitorOnly) {
+				status = STATUS_INVALID_PARAMETER;
+				break;
+			}
+
 			g_driverContext.MonitoringEnabled = config->EnableMonitoring;
 			g_driverContext.DetectionMode = config->Mode;
 			g_driverContext.BackupOnDetection = config->BackupOnDetection;
-			DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Integrity Guardians AntiRansomware: Monitoring set to %s, Mode: %lu, Backup: %s\n",
-				config->EnableMonitoring ? "ENABLED" : "DISABLED",
-				config->Mode,
-				config->BackupOnDetection ? "TRUE" : "FALSE");
+
+			DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,
+				"IGAR: Monitoring config - Enabled: %u, Mode: %u, Backup: %u\n",
+				config->EnableMonitoring, config->Mode, config->BackupOnDetection);
+
 			status = STATUS_SUCCESS;
 		}
-		else {
-			status = STATUS_INVALID_PARAMETER;
-			DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Integrity Guardians AntiRansomware: IOCTL_CONFIGURE_MONITORING - Invalid input buffer.\n");
+		__except (EXCEPTION_EXECUTE_HANDLER) {
+			status = GetExceptionCode();
+			DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL,
+				"IOCTL_CONFIGURE_MONITORING: Exception 0x%X\n", status);
 		}
 		break;
+	}
 
 	case IOCTL_STATUS:
-		// Retorna o status atual do driver usando a estrutura MONITORING_CONFIG.
-		if (outputBuffer && outputBufferLength >= sizeof(MONITORING_CONFIG)) {
+	{
+		if (!ValidateUserBuffer(outputBuffer, outputBufferLength)) {
+			status = STATUS_INVALID_PARAMETER;
+			DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL,
+				"IOCTL_STATUS: Buffer inválido\n");
+			break;
+		}
+
+		if (outputBufferLength < sizeof(MONITORING_CONFIG)) {
+			status = STATUS_BUFFER_TOO_SMALL;
+			bytesInfo = sizeof(MONITORING_CONFIG); // Informa o tamanho necessário
+			break;
+		}
+
+
+		__try {
 			PTR_MONITORING_CONFIG driverStatus = (PTR_MONITORING_CONFIG)outputBuffer;
 
-			// Copia as informações da g_driverContext para o buffer de saída
 			driverStatus->EnableMonitoring = g_driverContext.MonitoringEnabled;
 			driverStatus->Mode = g_driverContext.DetectionMode;
 			driverStatus->BackupOnDetection = g_driverContext.BackupOnDetection;
 
 			bytesInfo = sizeof(MONITORING_CONFIG);
 			status = STATUS_SUCCESS;
-			DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Integrity Guardians AntiRansomware: IOCTL_STATUS - Retornando status do driver.\n");
 		}
-		else {
-			status = STATUS_INVALID_PARAMETER;
-			bytesInfo = 0;
-			DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Integrity Guardians AntiRansomware: IOCTL_STATUS - Buffer de saída inválido (tamanho %lu).\n", outputBufferLength);
+		__except (EXCEPTION_EXECUTE_HANDLER) {
+			status = GetExceptionCode();
 		}
 		break;
+	}
 
 	case IOCTL_ADD_EXCLUDED_PATH:
 	{
-		__try {
-			if (inputBuffer && inputBufferLength >= sizeof(UNICODE_STRING)) {
-				PUNICODE_STRING path = (PUNICODE_STRING)inputBuffer;
+		if (!ValidateUserBuffer(inputBuffer, inputBufferLength) || inputBufferLength < sizeof(WCHAR)) {
+			status = STATUS_INVALID_PARAMETER;
+			break;
+		}
 
-				// Verificação segura do buffer
-				SAFE_ACCESS(path, sizeof(UNICODE_STRING), {
-					if (path->Buffer && path->Length > 0) {
-						status = AddExcludedPath(path);
-						if (NT_SUCCESS(status)) {
-							DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,
-								"Whitelist: Added path %wZ\n", path);
-						}
-					}
-					});
+		__try {
+			PWSTR userString = (PWSTR)inputBuffer;
+			ULONG maxChars = (inputBufferLength / sizeof(WCHAR)) - 1; // Excluir null terminator
+
+			// Encontrar o comprimento real da string
+			USHORT actualLength = 0;
+			for (ULONG i = 0; i < maxChars; i++) {
+				if (userString[i] == L'\0') {
+					break;
+				}
+				actualLength += sizeof(WCHAR);
 			}
-			else {
+
+			if (actualLength == 0) {
 				status = STATUS_INVALID_PARAMETER;
+				break;
 			}
+
+			UNICODE_STRING userPath;
+			userPath.Buffer = userString;
+			userPath.Length = actualLength;
+			userPath.MaximumLength = actualLength + sizeof(WCHAR);
+
+			DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,
+				"IOCTL_ADD_EXCLUDED_PATH: Received string: '%.*ws', Length: %u\n",
+				(int)(actualLength / sizeof(WCHAR)), userString);
+
+			status = AddExcludedPath(&userPath);
 		}
 		__except (EXCEPTION_EXECUTE_HANDLER) {
 			status = GetExceptionCode();
-			DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL,
-				"IOCTL_ADD_EXCLUDED_PATH exception: 0x%X\n", status);
 		}
 		break;
 	}
+
 	case IOCTL_REMOVE_EXCLUDED_PATH:
 	{
-		__try {
-			if (inputBuffer && inputBufferLength >= sizeof(UNICODE_STRING)) {
-				PUNICODE_STRING path = (PUNICODE_STRING)inputBuffer;
+		if (!ValidateUserBuffer(inputBuffer, inputBufferLength) ||
+			inputBufferLength < sizeof(UNICODE_STRING)) {
+			status = STATUS_INVALID_PARAMETER;
+			break;
+		}
 
-				SAFE_ACCESS(path, sizeof(UNICODE_STRING), {
-					status = RemoveExcludedPath(path);
-					if (NT_SUCCESS(status)) {
-						DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,
-							"Whitelist: Removed path %wZ\n", path);
-					}
-					});
-			}
-			else {
+		__try {
+			PUNICODE_STRING userPath = (PUNICODE_STRING)inputBuffer;
+
+			if (!ValidateUnicodeString(userPath, 4096)) {
 				status = STATUS_INVALID_PARAMETER;
+				break;
 			}
+
+			status = RemoveExcludedPath(userPath);
 		}
 		__except (EXCEPTION_EXECUTE_HANDLER) {
 			status = GetExceptionCode();
 			DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL,
-				"IOCTL_REMOVE_EXCLUDED_PATH exception: 0x%X\n", status);
+				"IOCTL_REMOVE_EXCLUDED_PATH: Exception 0x%X\n", status);
 		}
 		break;
 	}
+
 	case IOCTL_GET_EXCLUDED_PATHS:
 	{
+		if (!ValidateUserBuffer(outputBuffer, outputBufferLength)) {
+			status = STATUS_INVALID_PARAMETER;
+			break;
+		}
+
 		__try {
-			if (outputBuffer && outputBufferLength >= sizeof(ULONG)) {
-				// Retorna apenas o count por enquanto
+			if (outputBufferLength == sizeof(ULONG)) {
 				PULONG count = (PULONG)outputBuffer;
 				*count = GetExcludedPathsCount();
 				bytesInfo = sizeof(ULONG);
 				status = STATUS_SUCCESS;
 			}
 			else {
-				status = STATUS_BUFFER_TOO_SMALL;
+				status = SerializeExcludedPaths(outputBuffer, outputBufferLength, (PULONG)&bytesInfo);
 			}
 		}
 		__except (EXCEPTION_EXECUTE_HANDLER) {
 			status = GetExceptionCode();
 			DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL,
-				"IOCTL_GET_EXCLUDED_PATHS exception: 0x%X\n", status);
+				"IOCTL_GET_EXCLUDED_PATHS: Exception 0x%X\n", status);
 		}
 		break;
 	}
+
 	case IOCTL_CLEAR_EXCLUDED_PATHS:
 	{
 		__try {
 			status = ClearExcludedPaths();
-			if (NT_SUCCESS(status)) {
-				DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,
-					"Whitelist: All paths cleared\n");
-			}
 		}
 		__except (EXCEPTION_EXECUTE_HANDLER) {
 			status = GetExceptionCode();
 			DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL,
-				"IOCTL_CLEAR_EXCLUDED_PATHS exception: 0x%X\n", status);
+				"IOCTL_CLEAR_EXCLUDED_PATHS: Exception 0x%X\n", status);
 		}
 		break;
 	}
 
-		// Handlers para IRPs de CREATE e CLOSE (se o user-mode abrir/fechar o handle do dispositivo).
-	case IRP_MJ_CREATE:
-		DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Integrity Guardians AntiRansomware: IRP_MJ_CREATE received by DeviceControl.\n");
-		status = STATUS_SUCCESS; // Permite a criação do handle do dispositivo
-		break;
-
-	case IRP_MJ_CLOSE:
-		DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Integrity Guardians AntiRansomware: IRP_MJ_CLOSE received by DeviceControl.\n");
-		status = STATUS_SUCCESS; // Permite o fechamento do handle do dispositivo
-		break;
-
 	default:
-		// IOCTL desconhecido.
-		DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Integrity Guardians AntiRansomware: Unknown IOCTL 0x%X\n", ioControlCode);
+		DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_WARNING_LEVEL, "IGAR: Unknown IOCTL 0x%X\n", ioControlCode);
 		status = STATUS_INVALID_DEVICE_REQUEST;
 		break;
 	}
 
-	// completar as informações do IRP
 	irp->IoStatus.Status = status;
 	irp->IoStatus.Information = bytesInfo;
 	IoCompleteRequest(irp, IO_NO_INCREMENT);
 
-	DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Integrity Guardians AntiRansomware: DeviceControl completed with status 0x%X\n", status);
+	DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "IGAR: DeviceControl completed (0x%X)\n", status);
 	return status;
 }

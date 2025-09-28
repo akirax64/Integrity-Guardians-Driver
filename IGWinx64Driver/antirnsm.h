@@ -104,4 +104,11 @@ typedef struct MONITORING_CONFIG {
     DETECTION_MODE  Mode;               // Modo de detecção (Passive, Active, etc.)
     BOOLEAN         BackupOnDetection;  // TRUE para fazer backup do arquivo em caso de detecção
 } MONITORING_CONFIG, * PTR_MONITORING_CONFIG;
+
+// struct para resposta de caminhos excluídos
+typedef struct EXCLUDED_PATHS_RESPONSE {
+    ULONG NumberOfPaths;
+    ULONG TotalBufferSize;
+    WCHAR PathsBuffer[1];  
+} EXCLUDED_PATHS_RESPONSE, * PTR_EXCLUDED_PATHS_RESPONSE;
 #endif

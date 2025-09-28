@@ -63,4 +63,13 @@ NTSTATUS
 BroadcastAlertToClients(
     _In_ PTR_ALERT_DATA AlertData
 );
+NTSTATUS
+QueueAlertForLaterProcessing(
+    _In_ PUNICODE_STRING fileName,
+    _In_ HANDLE processId,
+    _In_ HANDLE threadId,
+    _In_ ULONG detectionType,
+    _In_ PUNICODE_STRING ruleName
+);
+
 #endif // !COMMUNICATION_PORT_H

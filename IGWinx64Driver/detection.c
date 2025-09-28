@@ -1,46 +1,242 @@
 #include "precompiled.h"
-// verifica se o caminho fornecido deve ser excluído da detecção
-BOOLEAN
-IsPathExcludedFromDetection(_In_ PUNICODE_STRING PathName)
-{
-    PAGED_CODE();
 
-    if (!PathName || !PathName->Buffer || PathName->Length == 0) {
+UNICODE_STRING g_CryptoRuleName = RTL_CONSTANT_STRING(ALGORITHM_PATTERN);
+
+__forceinline
+BOOLEAN
+IsIrqlSafeForOperation(
+    _In_ KIRQL CurrentIrql,
+    _In_ BOOLEAN RequirePassiveLevel
+)
+{
+    if (RequirePassiveLevel) {
+        return (CurrentIrql == PASSIVE_LEVEL);
+    }
+
+    return (CurrentIrql <= APC_LEVEL);
+}
+
+BOOLEAN
+QuickPatternCheckDispatchLevel(
+    _In_ PFLT_CALLBACK_DATA data
+)
+{
+    PMDL mdl = data->Iopb->Parameters.Write.MdlAddress;
+    if (!mdl) return FALSE;
+
+    PVOID writeBuffer = MmGetSystemAddressForMdlSafe(mdl, HighPagePriority);
+    if (!writeBuffer) return FALSE;
+
+    ULONG length = min(data->Iopb->Parameters.Write.Length, 64); // Muito limitado
+
+    return CheckPatternsDispatch(writeBuffer, length);
+}
+
+__forceinline
+BOOLEAN
+QuickExtensionCheckAPC(
+    _In_ PUNICODE_STRING fileName
+)
+{
+    if (!fileName || !fileName->Buffer || fileName->Length < 6) {
         return FALSE;
     }
 
-    BOOLEAN isExcluded = FALSE;
+    __try {
+        PWCHAR buf = fileName->Buffer;
+        USHORT len = fileName->Length / sizeof(WCHAR);
+        PWCHAR lastDot = NULL;
+
+        // Encontra o último ponto manualmente (sem wcsrchr)
+        for (USHORT i = 0; i < len; i++) {
+            if (buf[i] == L'.') {
+                lastDot = &buf[i];
+            }
+        }
+
+        if (!lastDot) return FALSE;
+
+        // Verifica apenas as extensões mais críticas (hardcoded)
+        // ".crypt" - 6 caracteres
+        if (lastDot[1] == L'c' && lastDot[2] == L'r' && lastDot[3] == L'y' &&
+            lastDot[4] == L'p' && lastDot[5] == L't' && lastDot[6] == L'\0') {
+            return TRUE;
+        }
+
+        // ".locked" - 7 caracteres  
+        if (lastDot[1] == L'l' && lastDot[2] == L'o' && lastDot[3] == L'c' &&
+            lastDot[4] == L'k' && lastDot[5] == L'e' && lastDot[6] == L'd' &&
+            lastDot[7] == L'\0') {
+            return TRUE;
+        }
+
+        // ".encrypted" - 10 caracteres (apenas verifica início)
+        if (lastDot[1] == L'e' && lastDot[2] == L'n' && lastDot[3] == L'c' &&
+            lastDot[4] == L'r') {
+            return TRUE;
+        }
+
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        // Silencia exceções em APC_LEVEL
+    }
+
+    return FALSE;
+}
+
+BOOLEAN
+QuickPatternCheckApcLevel(
+    _In_ PVOID buffer,
+    _In_ ULONG length
+)
+{
+    if (!buffer || length < 8) return FALSE;
+    length = min(length, 128); // Muito limitado
 
     __try {
-        isExcluded = IsPathExcluded(PathName);
+        volatile UCHAR test = *((volatile PUCHAR)buffer);
+        UNREFERENCED_PARAMETER(test);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        return FALSE;
+    }
 
-        if (isExcluded) {
-            DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,
-                "Detection: Path %wZ is excluded from scanning.\n", PathName);
+    return CheckPatternsDispatch(buffer, length);
+}
+BOOLEAN
+CheckPatternsDispatch(
+    _In_ PVOID buffer,
+    _In_ ULONG length
+)
+{
+    KIRQL currentIrql = KeGetCurrentIrql();
+    if (currentIrql > APC_LEVEL) {
+        return FALSE; // Não fazer pattern matching em DISPATCH_LEVEL ou maior
+    }
+
+    // Padrões hardcoded para evitar acesso a memória paginada
+    const UCHAR lockbitPattern[] = { 0x4C, 0x6F, 0x63, 0x6B, 0x42, 0x69, 0x74, 0x20 };
+
+    if (length < 8) return FALSE;
+
+    PUCHAR scanBuffer = (PUCHAR)buffer;
+
+	// Limitar o escaneamento para evitar longas operações em IRQL alto
+    ULONG safeLength = (length >= 8) ? (length - 8) : 0;
+    ULONG irqlLimit = (currentIrql == APC_LEVEL) ? 16 : 32;
+    ULONG scanLimit = (safeLength < irqlLimit) ? safeLength : irqlLimit;
+
+    for (ULONG i = 0; i <= scanLimit; i++) {
+        BOOLEAN match = TRUE;
+
+        for (ULONG j = 0; j < 8; j++) {
+            if (scanBuffer[i + j] != lockbitPattern[j]) {
+                match = FALSE;
+                break;
+            }
+        }
+
+        if (match) return TRUE;
+    }
+
+    return FALSE;
+}
+
+// DETECÇÃO DE PADRÕES DE CRIPTOGRAFIA
+BOOLEAN
+DetectEncryptionPatterns(
+    _In_ PVOID buffer,
+    _In_ ULONG length
+)
+{
+    KIRQL currentIrql = KeGetCurrentIrql();
+
+    if (!IsIrqlSafeForOperation(currentIrql, FALSE)) {
+        return FALSE;
+    }
+
+    if (currentIrql == PASSIVE_LEVEL) {
+        PAGED_CODE(); 
+    }
+
+    if (!buffer || length < 8 || length > MAX_SCAN_LENGTH) {
+        return FALSE;
+    }
+
+    if (currentIrql == APC_LEVEL) {
+        length = min(length, 128);
+    }
+
+    // Validação robusta do buffer
+    __try {
+        volatile UCHAR testByte = *((volatile PUCHAR)buffer);
+        UNREFERENCED_PARAMETER(testByte);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        return FALSE;
+    }
+
+    BOOLEAN detected = FALSE;
+
+    __try {
+        // Padrões de ransomware conhecidos
+        const UCHAR patterns[][8] = {
+            {0x4C, 0x6F, 0x63, 0x6B, 0x42, 0x69, 0x74, 0x20}, // "LockBit "
+            {0x43, 0x6F, 0x6E, 0x74, 0x69, 0x20, 0x52, 0x61}, // "Conti Ra"
+        };
+
+        ULONG scanLimit = min(length, 256);
+        if (currentIrql == APC_LEVEL) {
+            scanLimit = min(scanLimit, 64);
+        }
+
+        for (ULONG p = 0; p < ARRAYSIZE(patterns) && !detected; p++) {
+            for (ULONG i = 0; i <= scanLimit - 8 && !detected; i++) {
+                SIZE_T matches = 0;
+
+                // Verificação segura
+                SAFE_COMPARE((PUCHAR)buffer + i, patterns[p], 8, matches);
+
+                if (matches == 8) {
+                    detected = TRUE;
+                    if (currentIrql == PASSIVE_LEVEL) {
+                        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Pattern detected at position %lu\n", i);
+                    }
+                }
+            }
         }
     }
     __except (EXCEPTION_EXECUTE_HANDLER) {
-        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL,
-            "IsPathExcludedFromDetection: Exception 0x%X - allowing scan\n", GetExceptionCode());
-        isExcluded = FALSE;
+        detected = FALSE;
     }
 
-    return isExcluded;
+    return detected;
 }
 
-// verifica se o caminho fornecido deve ser monitorado
+// VERIFICAÇÃO RÁPIDA - CORREÇÕES DE IRQL
 BOOLEAN
-IsPathMonitored(
-    _In_ PUNICODE_STRING pathName
+QuickPatternCheck(
+    _In_ PVOID buffer,
+    _In_ ULONG length
 )
 {
-    PAGED_CODE();
+    KIRQL currentIrql = KeGetCurrentIrql();
 
-    return !IsPathExcludedFromDetection(pathName);
+    if (currentIrql >= DISPATCH_LEVEL) {
+        return FALSE;
+    }
+
+    if (!buffer || length < 8) return FALSE;
+
+    // Limitar drasticamente em IRQL alto
+    if (currentIrql == APC_LEVEL) {
+        return QuickPatternCheckApcLevel(buffer, length);
+    }
+
+    PAGED_CODE();
+    return DetectEncryptionPatterns(buffer, min(length, 512));
 }
 
-
-// detecta se o buffer contém padrões de regras definidos
 BOOLEAN
 ScanBuffer(
     _In_ PVOID buffer,
@@ -51,11 +247,26 @@ ScanBuffer(
 {
     UNREFERENCED_PARAMETER(process);
 
-    if (!buffer || length == 0) {
+    KIRQL currentIrql = KeGetCurrentIrql();
+
+    if (!IsIrqlSafeForOperation(currentIrql, FALSE)) {
         return FALSE;
     }
 
-	// verificando se esta na whitelist de paths
+    if (currentIrql == PASSIVE_LEVEL) {
+        PAGED_CODE();
+    }
+
+    // VALIDAÇÃO MAIS RIGOROSA
+    if (!buffer || length == 0 || length > MAX_SCAN_LENGTH) {
+        return FALSE;
+    }
+
+    if (currentIrql == APC_LEVEL) {
+        length = min(length, 1024);
+    }
+
+    // verificando se esta na whitelist de paths
     if (IsPathExcludedFromDetection(fileName)) {
         DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,
             "Detection: Path %wZ is excluded from scanning.\n", fileName);
@@ -66,49 +277,124 @@ ScanBuffer(
         "Detection: Scanning buffer for %wZ (Length: %lu)...\n", fileName, length);
 
     BOOLEAN detected = FALSE;
+    // VERIFICAÇÃO DE CRIPTOGRAFIA
+    if (DetectEncryptionPatterns(buffer, min(length, 8192))) {
+        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,
+            "Detection: CRYPTO PATTERN DETECTED in %wZ\n", fileName);
 
-    // protecao da lista de regras com push lock
-    ExAcquirePushLockShared(&g_driverContext.RulesListLock);
+        AlertToUserMode(
+            fileName,
+            PsGetCurrentProcessId(),
+            PsGetCurrentThreadId(),
+            RULE_FLAG_MATCH,
+            &g_CryptoRuleName
+        );
+    }
+    detected = TRUE;
+    // CORREÇÃO: ExTryAcquirePushLockShared que retorna BOOLEAN
 
-    PLIST_ENTRY listEntry = g_driverContext.RulesList.Flink;
-    while (listEntry != &g_driverContext.RulesList) {
-        PTR_RULE_INFO rule = CONTAINING_RECORD(listEntry, RULE_INFO, ListEntry);
+    if (!detected && currentIrql == PASSIVE_LEVEL) {
+        if (!IsPushLockInitialized(&g_driverContext.RulesListLock)) {
+            return detected;
+        }
+        NTSTATUS lockStatus = AcquirePushLockSharedWithTimeout(&g_driverContext.RulesListLock, 50);
+        if (NT_SUCCESS(lockStatus)) {
+            __try {
+                if (IsListValid(&g_driverContext.RulesList)) {
+                    PLIST_ENTRY listEntry = g_driverContext.RulesList.Flink;
+                    ULONG ruleCount = 0;
+                    const ULONG maxRules = 1000;
 
-        if (rule->PatternData && rule->PatternLength > 0 && length >= rule->PatternLength) {
-            for (ULONG i = 0; i <= length - rule->PatternLength; ++i) {
-                // comparando o buffer com o padrão da regra
-                SIZE_T bytesEqual = 0;
-                SAFE_COMPARE((PUCHAR)buffer + i, rule->PatternData, rule->PatternLength, bytesEqual);
+                    while (listEntry != &g_driverContext.RulesList && ruleCount < maxRules && !detected) {
+                        if (!IsListEntryValid(listEntry)) break;
 
-                if (bytesEqual == rule->PatternLength) {
-                    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,
-                        "!!! Detection: Rule '%wZ' detected in %wZ !!!\n", &rule->RuleName, fileName);
+                        PTR_RULE_INFO rule = CONTAINING_RECORD(listEntry, RULE_INFO, ListEntry);
 
-                    detected = TRUE;
+                        if (rule && rule->PatternData && rule->PatternLength > 0 &&
+                            length >= rule->PatternLength) {
 
-                    AlertToUserMode(
-                        fileName,
-                        PsGetCurrentProcessId(),
-                        PsGetCurrentThreadId(),
-                        rule->Flags,
-                        &rule->RuleName
-                    );
+                            ULONG maxScan = min(length - rule->PatternLength, 8192);
 
-                    if (detected && (rule->Flags & RULE_FLAG_MATCH)) {
-                        // se for detectado e ativar a flag de match, parar a varredura
-                        break;
+                            for (ULONG i = 0; i <= maxScan && !detected; ++i) {
+                                SIZE_T bytesEqual = 0;
+                                SAFE_COMPARE((PUCHAR)buffer + i, rule->PatternData,
+                                    rule->PatternLength, bytesEqual);
+
+                                if (bytesEqual == rule->PatternLength) {
+                                    detected = TRUE;
+                                    AlertToUserMode(fileName, PsGetCurrentProcessId(),
+                                        PsGetCurrentThreadId(), rule->Flags,
+                                        &rule->RuleName);
+                                }
+                            }
+                        }
+                        listEntry = listEntry->Flink;
+                        ruleCount++;
                     }
                 }
             }
+            __except (EXCEPTION_EXECUTE_HANDLER) {
+                detected = FALSE;
+            }
+            ExReleasePushLockShared(&g_driverContext.RulesListLock);
         }
-        listEntry = listEntry->Flink;
     }
-    ExReleasePushLockShared(&g_driverContext.RulesListLock);
 
     return detected;
 }
 
-// escaneando o conteúdo do arquivo fornecido
+BOOLEAN
+IsPathExcludedFromDetection(_In_ PUNICODE_STRING PathName)
+{
+    if (KeGetCurrentIrql() > APC_LEVEL) {
+        return FALSE;
+    }
+
+    PAGED_CODE();
+
+    if (!PathName || !PathName->Buffer || PathName->Length == 0) {
+        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,
+            "DEBUG: Path vazio/nulo - permitindo scan\n");
+        return FALSE;
+    }
+
+    BOOLEAN isExcluded = FALSE;
+
+    __try {
+        isExcluded = IsPathExcluded(PathName);
+
+        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,  //  LOG IMPORTANTE
+            "DEBUG: Path %wZ - Excluded: %s\n",
+            PathName, isExcluded ? "SIM" : "NÃO");
+
+        if (isExcluded) {
+            DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,
+                "DEBUG: Path EXCLUÍDO da detecção: %wZ\n", PathName);
+        }
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL,
+            "DEBUG: Exception em IsPathExcludedFromDetection - allowing scan\n");
+        isExcluded = FALSE;
+    }
+
+    return isExcluded;
+}
+
+BOOLEAN
+IsPathMonitored(
+    _In_ PUNICODE_STRING pathName
+)
+{
+    if (KeGetCurrentIrql() > APC_LEVEL) {
+        return TRUE;
+    }
+
+    PAGED_CODE();
+
+    return !IsPathExcludedFromDetection(pathName);
+}
+
 BOOLEAN
 ScanFileContent(
     _In_ PFILE_OBJECT fileObject,
@@ -116,6 +402,18 @@ ScanFileContent(
     _In_opt_ PEPROCESS process
 )
 {
+    if (KeGetCurrentIrql() > PASSIVE_LEVEL) {
+        return FALSE;
+    }
+
+    if (!fileObject || !initialInstance) {
+        return FALSE;
+    }
+    
+    if (!g_FilterHandle) {
+        return FALSE;
+    }
+
     PAGED_CODE();
 
     // verifica antes se o caminho do arquivo está na whitelist
@@ -125,14 +423,14 @@ ScanFileContent(
         return FALSE;
     }
 
-    NTSTATUS            status;
-    PVOID               readBuffer = NULL;
-    ULONG               bytesToRead;
-    ULONG               bytesRead;
-    LARGE_INTEGER       byteOffset;
-    BOOLEAN             fileDetected = FALSE;
-    ULONG               chunkSize = 65536;
-    ULONG               volumeAlignmentRequirement = 512;
+    NTSTATUS status;
+    PVOID readBuffer = NULL;
+    ULONG bytesToRead;
+    ULONG bytesRead;
+    LARGE_INTEGER byteOffset;
+    BOOLEAN fileDetected = FALSE;
+    ULONG chunkSize = 65536;
+    ULONG volumeAlignmentRequirement = 512;
 
     UNREFERENCED_PARAMETER(process);
 
@@ -264,6 +562,22 @@ ScanFileContent(
             }
         }
 
+        // VERIFICAÇÃO DE CRIPTOGRAFIA NO SCAN DE ARQUIVO
+        if (DetectEncryptionPatterns(readBuffer, bytesRead)) {
+            DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,
+                "Detection: CRYPTO PATTERN DETECTED during file scan of %wZ\n", &fileObject->FileName);
+
+            AlertToUserMode(
+                &fileObject->FileName,
+                PsGetCurrentProcessId(),
+                PsGetCurrentThreadId(),
+                RULE_FLAG_MATCH,
+                &g_CryptoRuleName
+            );
+            fileDetected = TRUE;
+            break;
+        }
+
         // se for reconhecido um padrão no buffer lido, vai marcar como detectado
         if (ScanBuffer(readBuffer, bytesRead, &fileObject->FileName, process)) {
             fileDetected = TRUE;
@@ -285,6 +599,23 @@ IsSuspiciousExtension(
     _In_ PUNICODE_STRING fileName
 )
 {
+    if (KeGetCurrentIrql() > APC_LEVEL) {
+        // Em IRQL alto, fazer verificação muito básica
+        __try {
+            if (fileName && fileName->Buffer) {
+                PWCHAR buf = fileName->Buffer;
+                for (USHORT i = 0; i < fileName->Length / sizeof(WCHAR); i++) {
+                    if (buf[i] == L'.' && buf[i + 1] == L'c' && buf[i + 2] == L'r' && buf[i + 3] == L'y' && buf[i + 4] == L'p' && buf[i + 5] == L't') {
+                        return TRUE;
+                    }
+                }
+            }
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) {
+        }
+        return FALSE;
+    }
+    
     // verificacao inicial de path
     if (IsPathExcludedFromDetection(fileName)) {
         DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,
@@ -299,6 +630,16 @@ IsSuspiciousExtension(
         L".akira", L".lockbit", L".conti", L".hydra",
         L".clop", L".ABYSS", L".avdn", L".dharma"
     };
+
+    if (KeGetCurrentIrql() >= DISPATCH_LEVEL) {
+        return FALSE;
+    }
+
+    if (KeGetCurrentIrql() == APC_LEVEL) {
+        return QuickExtensionCheckAPC(fileName);
+    }
+
+    PAGED_CODE();
 
     __try {
         // procurando a última ocorrência do ponto na string

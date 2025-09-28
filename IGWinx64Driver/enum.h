@@ -1,16 +1,19 @@
 #ifndef _ENUM_H_
 #define _ENUM_H_
+
 #pragma once
-
-#include <fltKernel.h>
 #include <ntstrsafe.h>
+#include <fltKernel.h>
 
-// identificador único para o nosso driver para comunicação com o user mode.
+// identificador único para o driver para comunicação com o user mode.
 #define DEVICE_ID 0x800
 
 // link simbólico para comunicação com o user mode
 #define DEVICE_NAME     L"\\Device\\IGAntiRansomware"
 #define DOS_DEVICE_NAME L"\\DosDevices\\IGAntiRansomware"
+
+// link simbólico para comunicar sobre detecção de criptografia
+#define ALGORITHM_PATTERN L"CryptoDetection"
 
 // IOCTL codes para comunicação com o user mode
 #define IOCTL_LOAD_RULES CTL_CODE( \
@@ -54,6 +57,8 @@
 #define TAG_RULE_ERROR  'RERR'
 #define TAG_SCAN        'SCAN'
 #define TAG_BACKUP      'BCKP'
+#define TAG_CLIENT      'CCLI'
+#define TAG_MESSAGE     'CMSG'
 
 #define RULE_FLAG_MATCH  0x01
 

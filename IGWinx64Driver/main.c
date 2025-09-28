@@ -35,62 +35,60 @@ DriverEntry(
     NTSTATUS status;
     UNICODE_STRING portName;
 
-    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,"Integrity Guardians AntiRansomware: DriverEntry called.\n");
+    if (KeGetCurrentIrql() != PASSIVE_LEVEL) {
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+
+    PAGED_CODE();
+
+    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "DriverEntry called - Initializing all components\n");
+
+	// inicializar estruturas principais
+    status = InitializeDriverStructures();
+    if (!NT_SUCCESS(status)) {
+        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Failed to initialize structures: 0x%X\n", status);
+        return status;
+    }
 
     DriverObject->DriverUnload = DriverUnload;
-    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,"Integrity Guardians AntiRansomware: DriverObject->DriverUnload set.\n");
-
-    RtlZeroMemory(&g_driverContext, sizeof(DRIVER_CONTEXT));
-    ExInitializePushLock(&g_driverContext.AlertQueueLock);
-    InitializeListHead(&g_driverContext.AlertQueue);
-    ExInitializePushLock(&g_driverContext.RulesListLock);
-    InitializeListHead(&g_driverContext.RulesList);
-    ExInitializePushLock(&g_driverContext.MonitoredPathsLock);
-    InitializeListHead(&g_driverContext.MonitoredPathsList);
-    ExInitializePushLock(&g_driverContext.ExcludedPathsLock);
-    InitializeListHead(&g_driverContext.ExcludedPathsList);
-    g_driverContext.MonitoringEnabled = TRUE;
-    g_driverContext.DetectionMode = DetectionModeActive;
-    g_driverContext.BackupOnDetection = FALSE;
-    g_driverContext.ClientPort = NULL;
-
-    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,"Integrity Guardians AntiRansomware: Global driver context initialized.\n");
-
-    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,"Integrity Guardians AntiRansomware: Initializing Minifilter components.\n");
 
     status = InitializeFilter(DriverObject, &FilterRegistration);
-    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,"Integrity Guardians AntiRansomware: InitializeFilter returned status 0x%X\n", status); // <--- Adicione esta linha
     if (!NT_SUCCESS(status)) {
-        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,"Integrity Guardians AntiRansomware: InitializeFilter failed with status 0x%X\n", status);
+        DbgPrintEx(DPFLTR_IHVBUS_ID, DPFLTR_ERROR_LEVEL, "InitializeFilter failed: 0x%X\n", status);
         return status;
+    }
+
+	// inicializar estruturas secundárias
+    status = InitializeSecondaryStructures();
+    if (!NT_SUCCESS(status)) {
+        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_WARNING_LEVEL, "Some secondary structures failed: 0x%X\n", status);
     }
 
     RtlInitUnicodeString(&portName, L"\\IGAntiRansomwarePort");
     status = InitializeCommunicationPort(g_FilterHandle, &portName);
-    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,"Integrity Guardians AntiRansomware: InitializeCommunicationPort returned status 0x%X\n", status); // <--- Adicione esta linha
     if (!NT_SUCCESS(status)) {
-        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,"Integrity Guardians AntiRansomware: InitializeCommunicationPort failed with status 0x%X\n", status);
+        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "InitializeCommunicationPort failed: 0x%X\n", status);
+        CleanFilter();
         return status;
     }
 
     status = InitializeDeviceControl(DriverObject);
-    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,"Integrity Guardians AntiRansomware: InitializeDeviceControl returned status 0x%X\n", status); // <--- Adicione esta linha
     if (!NT_SUCCESS(status)) {
-        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,"Integrity Guardians AntiRansomware: InitializeDeviceControl failed with status 0x%X\n", status);
+        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "InitializeDeviceControl failed: 0x%X\n", status);
+        CleanCommunicationPort();
+        CleanFilter();
         return status;
     }
 
     status = InitializeWhitelist();
     if (!NT_SUCCESS(status)) {
-        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL,
-            "Warning: Whitelist initialization failed: 0x%X\n", status);
-        // não vai falhar o driver, continua sem whitelist
+        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_WARNING_LEVEL, "Whitelist init warning: 0x%X\n", status);
     }
 
-    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,
-        "Driver loaded successfully with whitelist support\n");
+    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Driver loaded successfully\n");
     return STATUS_SUCCESS;
 }
+
 
 // descarrega o driver e limpa os recursos alocados
 VOID
@@ -99,20 +97,24 @@ DriverUnload(
 )
 {
     UNREFERENCED_PARAMETER(DriverObject);
-    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,"Integrity Guardians AntiRansomware: DriverUnload called. Initiating cleanup.\n");
 
-    // A ordem da limpeza é importante para evitar problemas de referência.
+    if (KeGetCurrentIrql() != PASSIVE_LEVEL) {
+        return;
+    }
 
-    // 1. Limpar as partes do Device Control tradicional.
+    PAGED_CODE();
+
+    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "DriverUnload - Cleaning all resources\n");
+
+    // ordem inversa da inicialização
     CleanDeviceControl();
-
-    // 2. Limpar as partes do Minifilter e da porta de comunicação.
     CleanCommunicationPort();
-
-    // CleanFilter (de filter_callbacks.c) cuida de FltUnregisterFilter.
     CleanFilter();
+    FreeRulesList();
+    ClearExcludedPaths();
 
-    FreeRulesList(); // Libera a memória alocada para as regras.
-   
-    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,"Integrity Guardians AntiRansomware: DriverUnload finished.\n");
+    // marcar estruturas como não inicializadas
+    InterlockedExchange(&g_InitializationState, 0);
+
+    DbgPrintEx(DPFLTR_IHVDRIVER_ID,DPFLTR_INFO_LEVEL, "DriverUnload completed\n");
 }

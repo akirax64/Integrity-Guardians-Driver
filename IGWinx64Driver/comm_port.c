@@ -11,31 +11,30 @@ InitializeCommunicationPort(
     OBJECT_ATTRIBUTES objAttributes;
     PSECURITY_DESCRIPTOR secDescriptor;
 
+    if (KeGetCurrentIrql() > PASSIVE_LEVEL) {
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+
     PAGED_CODE();
 
     DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Integrity Guardians AntiRansomware: Initializing communication port...\n");
 
-    ExInitializePushLock(&g_driverContext.ClientListLock);
-    InitializeListHead(&g_driverContext.ClientList);
-
-    PAGED_CODE(); // Garantir PASSIVE_LEVEL
-
-    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Integrity Guardians AntiRansomware: Initializing communication port...\n");
-
-    // Inicializar lista de clientes com verificacao
-    if ((PVOID)g_driverContext.ClientListLock == NULL) {
+    if (g_driverContext.ClientListLock == 0) {
         ExInitializePushLock(&g_driverContext.ClientListLock);
     }
     InitializeListHead(&g_driverContext.ClientList);
 
-    // criando o descritor de seguranca para a porta de comunicacao
-    status = FltBuildDefaultSecurityDescriptor(&secDescriptor, FLT_PORT_ALL_ACCESS);
+    status = InitializeSecondaryStructures();
     if (!NT_SUCCESS(status)) {
-        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Integrity Guardians AntiRansomware: Failed to build the security descriptor. (0x%X)\n", status);
-        return status;
+        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Integrity Guardians AntiRansomware: Secondary structures not ready. (0x%X)\n", status);
     }
 
-    // inicializando atributos do objeto para a porta de comunicacao
+    status = FltBuildDefaultSecurityDescriptor(&secDescriptor, FLT_PORT_ALL_ACCESS);
+    if (!NT_SUCCESS(status)) {
+        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Integrity Guardians AntiRansomware: Failed to build security descriptor: (0x%X)\n", status);
+		return status;
+    }
+
     InitializeObjectAttributes(
         &objAttributes,
         portName,
@@ -44,7 +43,6 @@ InitializeCommunicationPort(
         secDescriptor
     );
 
-    // criando a porta de comunicacao
     status = FltCreateCommunicationPort(
         filterHandle,
         &g_ServerPort,
@@ -58,7 +56,6 @@ InitializeCommunicationPort(
 
     FltFreeSecurityDescriptor(secDescriptor);
 
-    // se falhar ao criar a porta, loga o erro e retorna o status
     if (!NT_SUCCESS(status)) {
         DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Integrity Guardians AntiRansomware: Failed to create the security descriptor. (0x%X)\n", status);
         g_ServerPort = NULL;
@@ -83,9 +80,12 @@ ConnectionNotify(
     UNREFERENCED_PARAMETER(connectionContext);
     UNREFERENCED_PARAMETER(size);
 
+    if (KeGetCurrentIrql > PASSIVE_LEVEL) {
+		return STATUS_INVALID_DEVICE_STATE;
+    }
+
     PAGED_CODE();
 
-    // verifica se os parametros sao validos
     if (clientPort == NULL || connectionPortCookie == NULL) {
         DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "ConnectionNotify: Parametros invalidos\n");
         return STATUS_INVALID_PARAMETER;
@@ -93,7 +93,6 @@ ConnectionNotify(
 
     DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Integrity Guardians AntiRansomware: User mode connected! ClientPort: %p\n", clientPort);
 
-    // alocando contexto do cliente com verificacao
     PTR_CLIENT_CONTEXT clientContext = (PTR_CLIENT_CONTEXT)ExAllocatePool2(
         POOL_FLAG_PAGED, sizeof(CLIENT_CONTEXT), TAG_CLIENT);
 
@@ -105,15 +104,17 @@ ConnectionNotify(
     RtlZeroMemory(clientContext, sizeof(CLIENT_CONTEXT));
     clientContext->ClientPort = clientPort;
     clientContext->IsActive = TRUE;
-    InitializeListHead(&clientContext->ListEntry);
-
-    ExAcquirePushLockExclusive(&g_driverContext.ClientListLock);
-
-    // verifica se a lista foi inicializada
-    if (g_driverContext.ClientList.Flink == NULL) {
+    if (!IsListValid(&g_driverContext.ClientList)) {
         InitializeListHead(&g_driverContext.ClientList);
     }
 
+
+    NTSTATUS lockStatus = AcquirePushLockExclusiveWithTimeout(&g_driverContext.ClientListLock, 100);
+    if (!NT_SUCCESS(lockStatus)) {
+        ExFreePoolWithTag(clientContext, TAG_CLIENT);
+        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Failed to acquire client list lock: 0x%X\n", lockStatus);
+        return lockStatus;
+    }
     InsertTailList(&g_driverContext.ClientList, &clientContext->ListEntry);
     ExReleasePushLockExclusive(&g_driverContext.ClientListLock);
 
@@ -132,6 +133,10 @@ DisconnectionNotify(
 {
     PTR_CLIENT_CONTEXT clientContext = (PTR_CLIENT_CONTEXT)connectionCookie;
 
+    if (KeGetCurrentIrql() > PASSIVE_LEVEL) {
+        return;
+    }
+
     PAGED_CODE();
 
     if (clientContext == NULL) {
@@ -141,48 +146,25 @@ DisconnectionNotify(
 
     DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Integrity Guardians AntiRansomware: User mode disconnected. ClientPort: %p\n", clientContext->ClientPort);
 
-    // retirando o cliente da lista com verificacao
-    ExAcquirePushLockExclusive(&g_driverContext.ClientListLock);
-
-    // verificacao rigorosa da integridade da lista antes de remover
-    if (clientContext->ListEntry.Flink != NULL &&
-        clientContext->ListEntry.Blink != NULL &&
-        !IsListEmpty(&g_driverContext.ClientList) &&
-        clientContext->ListEntry.Flink != &clientContext->ListEntry &&
-        clientContext->ListEntry.Blink != &clientContext->ListEntry) {
-
-        PLIST_ENTRY currentEntry;
-        BOOLEAN found = FALSE;
-        for (currentEntry = g_driverContext.ClientList.Flink;
-            currentEntry != &g_driverContext.ClientList;
-            currentEntry = currentEntry->Flink) {
-            if (currentEntry == &clientContext->ListEntry) {
-                found = TRUE;
-                break;
+    NTSTATUS lockStatus = AcquirePushLockExclusiveWithTimeout(&g_driverContext.ClientListLock, 50);
+    if (NT_SUCCESS(lockStatus)) {
+        if (IsListEntryValid(&clientContext->ListEntry)) {
+            // Verificar se ainda está na lista
+            PLIST_ENTRY current;
+            BOOLEAN found = FALSE;
+            for (current = g_driverContext.ClientList.Flink;
+                current != &g_driverContext.ClientList;
+                current = current->Flink) {
+                if (current == &clientContext->ListEntry) {
+                    found = TRUE;
+                    break;
+                }
+            }
+            if (found) {
+                RemoveEntryList(&clientContext->ListEntry);
             }
         }
-
-        if (found) {
-            RemoveEntryList(&clientContext->ListEntry);
-        }
-        else {
-            DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_WARNING_LEVEL,
-                "DisconnectionNotify: Entry not found in list\n");
-        }
-    }
-    else {
-        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_WARNING_LEVEL,
-            "DisconnectionNotify: Invalid list entry\n");
-    }
-
-    ExReleasePushLockExclusive(&g_driverContext.ClientListLock);
-
-    if (clientContext != NULL) {
-        clientContext->ClientPort = NULL;
-        clientContext->IsActive = FALSE;
-
-        ExFreePoolWithTag(clientContext, TAG_CLIENT);
-        clientContext = NULL;
+        ExReleasePushLockExclusive(&g_driverContext.ClientListLock);
     }
 }
 
@@ -190,73 +172,91 @@ DisconnectionNotify(
 NTSTATUS
 BroadcastAlertToClients(
     _In_ PTR_ALERT_DATA AlertData
-) {
-    PAGED_CODE();
+)
+{
+    if (KeGetCurrentIrql() > PASSIVE_LEVEL) {
+        return STATUS_INVALID_DEVICE_STATE;
+    }
 
+    PAGED_CODE();
 
     if (AlertData == NULL) {
         DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "BroadcastAlertToClients: AlertData is NULL\n");
         return STATUS_INVALID_PARAMETER;
     }
 
-    // verificar IRQL
-    if (KeGetCurrentIrql() > PASSIVE_LEVEL) {
-        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL,
-            "BroadcastAlertToClients: IRQL too high (%d)\n", KeGetCurrentIrql());
-        return STATUS_INVALID_DEVICE_STATE;
+    NTSTATUS acquireStatus = AcquirePushLockSharedWithTimeout(&g_driverContext.ClientListLock, 100);
+    if (!NT_SUCCESS(acquireStatus)) {
+        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_WARNING_LEVEL,
+            "BroadcastAlertToClients: Failed to acquire client list lock: 0x%X\n", acquireStatus);
+        return acquireStatus;
     }
 
-    PLIST_ENTRY entry, nextEntry;
-    PTR_CLIENT_CONTEXT clientContext;
-    ULONG clientsNotified = 0;
-    ULONG clientsTotal = 0;
+    // Verificar se há clientes conectados
+    if (IsListEmpty(&g_driverContext.ClientList) ||
+        !IsListValid(&g_driverContext.ClientList)) {
+        ExReleasePushLockShared(&g_driverContext.ClientListLock);
+        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "BroadcastAlertToClients: No clients connected\n");
+        return STATUS_SUCCESS;
+    }
 
-    // alocar buffer para a mensagem
+    ULONG activeClients = 0;
+    PLIST_ENTRY entry;
+    for (entry = g_driverContext.ClientList.Flink;
+        entry != &g_driverContext.ClientList;
+        entry = entry->Flink) {
+
+        if (!IsListEntryValid(entry)) {
+            DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_WARNING_LEVEL, "Invalid list entry during client count\n");
+            break;
+        }
+
+        PTR_CLIENT_CONTEXT client = CONTAINING_RECORD(entry, CLIENT_CONTEXT, ListEntry);
+        if (client && client->IsActive && client->ClientPort) {
+            activeClients++;
+        }
+    }
+
+    if (activeClients == 0) {
+        ExReleasePushLockShared(&g_driverContext.ClientListLock);
+        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "BroadcastAlertToClients: No active clients\n");
+        return STATUS_SUCCESS;
+    }
+
+    // Alocar buffer para mensagem
     PVOID messageBuffer = ExAllocatePool2(POOL_FLAG_PAGED, sizeof(ALERT_DATA), TAG_MESSAGE);
     if (!messageBuffer) {
+        ExReleasePushLockShared(&g_driverContext.ClientListLock);
         DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "BroadcastAlertToClients: Failed to allocate message buffer\n");
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
-    // copiando dados para o buffer com verificação
     __try {
         RtlCopyMemory(messageBuffer, AlertData, sizeof(ALERT_DATA));
     }
     __except (EXCEPTION_EXECUTE_HANDLER) {
+        ExReleasePushLockShared(&g_driverContext.ClientListLock);
         ExFreePoolWithTag(messageBuffer, TAG_MESSAGE);
         DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "BroadcastAlertToClients: Exception copying alert data\n");
         return GetExceptionCode();
     }
 
-    ExAcquirePushLockShared(&g_driverContext.ClientListLock);
+    ULONG clientsNotified = 0;
+    ULONG clientsTotal = 0;
 
-    // verificar se a lista é válida e não vazia
-    if (g_driverContext.ClientList.Flink == NULL ||
-        g_driverContext.ClientList.Blink == NULL ||
-        IsListEmpty(&g_driverContext.ClientList)) {
-        ExReleasePushLockShared(&g_driverContext.ClientListLock);
-        ExFreePoolWithTag(messageBuffer, TAG_MESSAGE);
-        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "BroadcastAlertToClients: No clients connected\n");
-        return STATUS_SUCCESS;
-    }
+    for (entry = g_driverContext.ClientList.Flink;
+        entry != &g_driverContext.ClientList;
+        entry = entry->Flink) {
 
-    entry = g_driverContext.ClientList.Flink;
-    while (entry != NULL && entry != &g_driverContext.ClientList)
-    {
-        nextEntry = entry->Flink;
-
-        if (entry == NULL || entry->Flink == NULL || entry->Blink == NULL) {
-            DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "BroadcastAlertToClients: Invalid list entry\n");
-            break;
+        if (!IsListEntryValid(entry)) {
+            DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_WARNING_LEVEL, "Invalid list entry during broadcast\n");
+            continue;
         }
 
-        clientContext = CONTAINING_RECORD(entry, CLIENT_CONTEXT, ListEntry);
+        PTR_CLIENT_CONTEXT clientContext = CONTAINING_RECORD(entry, CLIENT_CONTEXT, ListEntry);
         clientsTotal++;
 
-        if (clientContext == NULL ||
-            !clientContext->IsActive ||
-            clientContext->ClientPort == NULL) {
-            entry = nextEntry;
+        if (!clientContext || !clientContext->IsActive || !clientContext->ClientPort) {
             continue;
         }
 
@@ -273,29 +273,27 @@ BroadcastAlertToClients(
 
             if (NT_SUCCESS(sendStatus)) {
                 clientsNotified++;
-                DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_TRACE_LEVEL, "Alert sent to client %p successfully\n", clientContext->ClientPort);
+                DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_TRACE_LEVEL,
+                    "BroadcastAlertToClients: Successfully notified client %p\n", clientContext->ClientPort);
             }
             else {
-                clientContext->IsActive = FALSE;
                 DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_WARNING_LEVEL,
-                    "Failed to send alert to client %p: 0x%X\n", clientContext->ClientPort, sendStatus);
+                    "BroadcastAlertToClients: Failed to notify client %p: 0x%X\n",
+                    clientContext->ClientPort, sendStatus);
             }
         }
         __except (EXCEPTION_EXECUTE_HANDLER) {
-            DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL,
-                "Exception sending to client %p: 0x%X\n",
-                clientContext->ClientPort, GetExceptionCode());
-            clientContext->IsActive = FALSE;
+            DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_WARNING_LEVEL,
+                "BroadcastAlertToClients: Exception notifying client %p\n", clientContext->ClientPort);
         }
-
-        entry = nextEntry;
     }
 
     ExReleasePushLockShared(&g_driverContext.ClientListLock);
     ExFreePoolWithTag(messageBuffer, TAG_MESSAGE);
 
     DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,
-        "BroadcastAlertToClients: Notified %lu of %lu clients\n", clientsNotified, clientsTotal);
+        "BroadcastAlertToClients: Notified %lu of %lu clients (total active: %lu)\n",
+        clientsNotified, clientsTotal, activeClients);
 
     return clientsNotified > 0 ? STATUS_SUCCESS : STATUS_NO_SUCH_DEVICE;
 }
@@ -322,7 +320,6 @@ MessageNotify(
     NTSTATUS status = STATUS_SUCCESS;
     *returnOutputBufferLength = 0;
 
-    // Modo PULL: ainda suportar obtencao de alertas via IOCTL
     if (outputBuffer && outputBufferLength >= sizeof(ALERT_DATA))
     {
         ExAcquirePushLockExclusive(&g_driverContext.AlertQueueLock);
@@ -332,19 +329,21 @@ MessageNotify(
             PLIST_ENTRY listEntry = RemoveHeadList(&g_driverContext.AlertQueue);
             PTR_ALERT_DATA_ENTRY alertEntry = CONTAINING_RECORD(listEntry, ALERT_DATA_ENTRY, ListEntry);
 
-            if (outputBufferLength >= sizeof(ALERT_DATA))
+            if (alertEntry && outputBufferLength >= sizeof(ALERT_DATA))
             {
                 RtlCopyMemory(outputBuffer, &alertEntry->Alert, sizeof(ALERT_DATA));
                 *returnOutputBufferLength = sizeof(ALERT_DATA);
                 DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Integrity Guardians AntiRansomware: Send alert to user mode. File: %wS\n", alertEntry->Alert.FilePath);
+                ExFreePoolWithTag(alertEntry, TAG_ALERT);
             }
             else
             {
                 status = STATUS_BUFFER_TOO_SMALL;
                 DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Integrity Guardians AntiRansomware: Output buffer too small for alert.\n");
+                if (alertEntry) {
+                    InsertHeadList(&g_driverContext.AlertQueue, &alertEntry->ListEntry);
+                }
             }
-
-            ExFreePoolWithTag(alertEntry, TAG_ALERT);
         }
         else
         {
@@ -362,7 +361,6 @@ MessageNotify(
 
     return status;
 }
-
 NTSTATUS
 GetAlert(
     _Out_ PVOID outputBuffer,
@@ -370,6 +368,10 @@ GetAlert(
     _Out_ PULONG bytesReturned
 )
 {
+    if (KeGetCurrentIrql > PASSIVE_LEVEL)
+    {
+		return STATUS_INVALID_DEVICE_STATE;
+    }
     PAGED_CODE();
 
     NTSTATUS status = STATUS_SUCCESS;
@@ -382,10 +384,8 @@ GetAlert(
         return STATUS_INVALID_PARAMETER;
     }
 
-    // inicializa o buffer de saída com zeros
     RtlZeroMemory(outputBuffer, min(outputBufferLength, sizeof(ALERT_DATA)));
 
-    // verificaçao do irql
     if (KeGetCurrentIrql() > APC_LEVEL) {
         DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL,
             "GetAlert: IRQL muito alto (%d) - requer PASSIVE_LEVEL\n",
@@ -394,9 +394,6 @@ GetAlert(
     }
 
     if (outputBufferLength < sizeof(ALERT_DATA)) {
-        //DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL,
-            //"GetAlert: Buffer de saída muito pequeno (size: %lu, necessário: %lu)\n",
-            //outputBufferLength, sizeof(ALERT_DATA));
         return STATUS_BUFFER_TOO_SMALL;
     }
 
@@ -411,7 +408,6 @@ GetAlert(
 
     ExAcquirePushLockExclusive(&g_driverContext.AlertQueueLock);
 
-    // verifica se a queue está corrompida
     if (!MmIsAddressValid(&g_driverContext.AlertQueue) ||
         !MmIsAddressValid(g_driverContext.AlertQueue.Flink) ||
         !MmIsAddressValid(g_driverContext.AlertQueue.Blink)) {
@@ -426,8 +422,6 @@ GetAlert(
         ExReleasePushLockExclusive(&g_driverContext.AlertQueueLock);
         DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,
             "GetAlert: Fila de alertas vazia\n");
-
-        // retorna estrutura vazia mas inicializada
         RtlZeroMemory(outputBuffer, sizeof(ALERT_DATA));
         *bytesReturned = 0;
         return STATUS_NO_MORE_ENTRIES;
@@ -455,7 +449,6 @@ GetAlert(
         DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL,
             "GetAlert: Estrutura do alerta corrompida\n");
 
-        // tenta limpar a entrada corrompida
         if (MmIsAddressValid(alertEntry)) {
             RemoveEntryList(listEntry);
             ExFreePoolWithTag(alertEntry, TAG_ALERT);
@@ -474,25 +467,25 @@ GetAlert(
     }
     __except (EXCEPTION_EXECUTE_HANDLER) {
         ExReleasePushLockExclusive(&g_driverContext.AlertQueueLock);
-        ExFreePoolWithTag(alertEntry, TAG_ALERT);
-
+        if (alertEntry) {
+            ExFreePoolWithTag(alertEntry, TAG_ALERT);
+        }
         DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL,
             "GetAlert: Dados do alerta corrompidos\n");
         return STATUS_INTERNAL_ERROR;
     }
 
-    ExFreePoolWithTag(alertEntry, TAG_ALERT);
-    alertEntry = NULL;
+    if (alertEntry) {
+        ExFreePoolWithTag(alertEntry, TAG_ALERT);
+    }
 
     ExReleasePushLockExclusive(&g_driverContext.AlertQueueLock);
 
     __try {
         RtlCopyMemory(outputBuffer, &localAlert, sizeof(ALERT_DATA));
         *bytesReturned = sizeof(ALERT_DATA);
-
         DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,
             "GetAlert: Alerta entregue com sucesso\n");
-
         status = STATUS_SUCCESS;
     }
     __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -514,6 +507,12 @@ AlertToUserMode(
     _In_ PUNICODE_STRING ruleName
 )
 {
+    KIRQL currentIrql = KeGetCurrentIrql();
+
+    if (currentIrql > PASSIVE_LEVEL) {
+        return QueueAlertForLaterProcessing(fileName, processId, threadId, detectionType, ruleName);
+    }
+
     PAGED_CODE();
 
     if (fileName == NULL || ruleName == NULL) {
@@ -521,9 +520,8 @@ AlertToUserMode(
         return STATUS_INVALID_PARAMETER;
     }
 
-
     PTR_ALERT_DATA_ENTRY alertEntry = (PTR_ALERT_DATA_ENTRY)ExAllocatePool2(
-        POOL_FLAG_NON_PAGED, sizeof(ALERT_DATA_ENTRY), TAG_ALERT);
+        POOL_FLAG_PAGED, sizeof(ALERT_DATA_ENTRY), TAG_ALERT);
 
     if (!alertEntry) {
         DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Integrity Guardians AntiRansomware: Failed to allocate memory for alert.\n");
@@ -567,59 +565,45 @@ AlertToUserMode(
         ExFreePoolWithTag(alertEntry, TAG_ALERT);
         return STATUS_SUCCESS;
     }
-    else {
-        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_WARNING_LEVEL, "AlertToUserMode: PUSH failed (0x%X), using PULL fallback\n", status);
 
-        ExAcquirePushLockExclusive(&g_driverContext.AlertQueueLock);
-
-        if (g_driverContext.AlertQueue.Flink == NULL) {
+    NTSTATUS lockStatus = AcquirePushLockExclusiveWithTimeout(&g_driverContext.AlertQueueLock, 50);
+    if (NT_SUCCESS(lockStatus)) {
+        if (!IsListValid(&g_driverContext.AlertQueue)) {
             InitializeListHead(&g_driverContext.AlertQueue);
         }
-
         InsertTailList(&g_driverContext.AlertQueue, &alertEntry->ListEntry);
         ExReleasePushLockExclusive(&g_driverContext.AlertQueueLock);
-
-        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Integrity Guardians AntiRansomware: Alert queued for %wS.\n", fileName->Buffer);
-        return status;
     }
+    else {
+        ExFreePoolWithTag(alertEntry, TAG_ALERT);
+    }
+	return status;
 }
 
 // limpando a porta de comunicacao do driver
 VOID
 CleanCommunicationPort(VOID)
 {
+    if (KeGetCurrentIrql() >= DISPATCH_LEVEL)
+    {
+        return ;
+    }
+
     PAGED_CODE();
 
     DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Integrity Guardians AntiRansomware: Cleaning communication port...\n");
 
-    // Limpeza da lista de clientes
     if (g_driverContext.ClientListLock) {
         __try {
             ExAcquirePushLockExclusive(&g_driverContext.ClientListLock);
 
-            if (g_driverContext.ClientList.Flink && g_driverContext.ClientList.Blink) {
-                PLIST_ENTRY entry;
+            while (!IsListEmpty(&g_driverContext.ClientList)) {
+                PLIST_ENTRY entry = RemoveHeadList(&g_driverContext.ClientList);
+                PTR_CLIENT_CONTEXT clientContext = CONTAINING_RECORD(entry, CLIENT_CONTEXT, ListEntry);
 
-                while ((entry = g_driverContext.ClientList.Flink) &&
-                    entry != &g_driverContext.ClientList &&
-                    !IsListEmpty(&g_driverContext.ClientList)) {
-
-                    PLIST_ENTRY nextEntry = entry->Flink;
-
-                    if (entry->Flink && entry->Blink) {
-                        RemoveEntryList(entry);
-
-                        PTR_CLIENT_CONTEXT clientContext = CONTAINING_RECORD(entry, CLIENT_CONTEXT, ListEntry);
-
-                        if (clientContext) {
-                            clientContext->ClientPort = NULL;
-                            ExFreePoolWithTag(clientContext, TAG_CLIENT);
-                        }
-                    }
-
-                    if (nextEntry == g_driverContext.ClientList.Flink) {
-                        break;
-                    }
+                if (clientContext) {
+                    clientContext->ClientPort = NULL;
+                    ExFreePoolWithTag(clientContext, TAG_CLIENT);
                 }
             }
 
@@ -632,32 +616,16 @@ CleanCommunicationPort(VOID)
         }
     }
 
-    // Limpeza da fila de alertas
     if (g_driverContext.AlertQueueLock) {
         __try {
             ExAcquirePushLockExclusive(&g_driverContext.AlertQueueLock);
 
-            if (g_driverContext.AlertQueue.Flink && g_driverContext.AlertQueue.Blink) {
-                while (!IsListEmpty(&g_driverContext.AlertQueue)) {
-                    PLIST_ENTRY entry = g_driverContext.AlertQueue.Flink;
+            while (!IsListEmpty(&g_driverContext.AlertQueue)) {
+                PLIST_ENTRY entry = RemoveHeadList(&g_driverContext.AlertQueue);
+                PTR_ALERT_DATA_ENTRY alertEntry = CONTAINING_RECORD(entry, ALERT_DATA_ENTRY, ListEntry);
 
-                    if (entry == &g_driverContext.AlertQueue) {
-                        break;
-                    }
-
-                    if (entry && entry->Flink && entry->Blink) {
-                        RemoveEntryList(entry);
-
-                        PTR_ALERT_DATA_ENTRY alertEntry = CONTAINING_RECORD(entry, ALERT_DATA_ENTRY, ListEntry);
-
-                        if (alertEntry) {
-                            ExFreePoolWithTag(alertEntry, TAG_ALERT);
-                        }
-                    }
-                    else {
-                        InitializeListHead(&g_driverContext.AlertQueue);
-                        break;
-                    }
+                if (alertEntry) {
+                    ExFreePoolWithTag(alertEntry, TAG_ALERT);
                 }
             }
 
@@ -683,4 +651,90 @@ CleanCommunicationPort(VOID)
     }
 
     DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Integrity Guardians AntiRansomware: Communication port closed.\n");
+}
+
+// NOVA FUNÇÃO: Alert queue segura para IRQL alto
+NTSTATUS
+QueueAlertForLaterProcessing(
+    _In_ PUNICODE_STRING fileName,
+    _In_ HANDLE processId,
+    _In_ HANDLE threadId,
+    _In_ ULONG detectionType,
+    _In_ PUNICODE_STRING ruleName
+)
+{
+    NTSTATUS status = STATUS_SUCCESS;
+    PTR_ALERT_DATA_ENTRY alertEntry = NULL;
+
+    ULONG poolFlags = (KeGetCurrentIrql() <= APC_LEVEL) ?
+        POOL_FLAG_PAGED : POOL_FLAG_NON_PAGED;
+
+    alertEntry = (PTR_ALERT_DATA_ENTRY)ExAllocatePool2(
+        poolFlags, sizeof(ALERT_DATA_ENTRY), TAG_ALERT);
+
+    if (!alertEntry) {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    RtlZeroMemory(alertEntry, sizeof(ALERT_DATA_ENTRY));
+
+    __try {
+        alertEntry->Alert.Timestamp = KeQueryPerformanceCounter(NULL);
+        alertEntry->Alert.ProcessId = HandleToUlong(processId);
+        alertEntry->Alert.ThreadId = HandleToUlong(threadId);
+        alertEntry->Alert.DetectionType = detectionType;
+
+        if (fileName && fileName->Buffer && fileName->Length > 0) {
+            USHORT copyLength = (USHORT)min((ULONG)fileName->Length,
+                sizeof(alertEntry->Alert.FilePath) - sizeof(WCHAR));
+            RtlCopyMemory(alertEntry->Alert.FilePath, fileName->Buffer, copyLength);
+            alertEntry->Alert.FilePath[copyLength / sizeof(WCHAR)] = L'\0';
+        }
+
+        if (ruleName && ruleName->Buffer && ruleName->Length > 0) {
+            RtlStringCchPrintfW(alertEntry->Alert.AlertMessage,
+                ARRAYSIZE(alertEntry->Alert.AlertMessage),
+                L"Detection: %wZ", ruleName);
+        }
+        else {
+            RtlStringCchCopyW(alertEntry->Alert.AlertMessage,
+                ARRAYSIZE(alertEntry->Alert.AlertMessage),
+                L"Ransomware pattern detected");
+        }
+
+        if (IsPushLockInitialized(&g_driverContext.AlertQueueLock)) {
+            NTSTATUS lockStatus = AcquirePushLockExclusiveWithTimeout(&g_driverContext.AlertQueueLock, 50);
+
+            if (NT_SUCCESS(lockStatus)) {
+                // Verificar se a lista é válida
+                if (!IsListValid(&g_driverContext.AlertQueue)) {
+                    InitializeListHead(&g_driverContext.AlertQueue);
+                }
+
+                // Inserir na fila
+                InsertTailList(&g_driverContext.AlertQueue, &alertEntry->ListEntry);
+                ExReleasePushLockExclusive(&g_driverContext.AlertQueueLock);
+
+                status = STATUS_SUCCESS;
+            }
+            else {
+                // Não conseguiu adquirir o lock? liberar memória
+                ExFreePoolWithTag(alertEntry, TAG_ALERT);
+                status = lockStatus;
+            }
+        }
+        else {
+            // Lock não inicializado - liberar memória
+            ExFreePoolWithTag(alertEntry, TAG_ALERT);
+            status = STATUS_DEVICE_NOT_READY;
+        }
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        if (alertEntry) {
+            ExFreePoolWithTag(alertEntry, TAG_ALERT);
+        }
+        status = GetExceptionCode();
+    }
+
+    return status;
 }
