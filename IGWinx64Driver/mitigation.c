@@ -72,6 +72,11 @@ BackupFile(
     _In_ PFLT_INSTANCE initialInstance
 )
 {
+    KIRQL currentIrql = KeGetCurrentIrql();
+    if (currentIrql > PASSIVE_LEVEL) {
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+
     PAGED_CODE();
 
     NTSTATUS        status = STATUS_SUCCESS;
@@ -243,6 +248,11 @@ NTSTATUS
 DeleteBackupFile(
     _In_ PUNICODE_STRING FileName
 ){
+    KIRQL currentIrql = KeGetCurrentIrql();
+    if (currentIrql > PASSIVE_LEVEL) {
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+
     PAGED_CODE();
 
     NTSTATUS status;
@@ -312,6 +322,11 @@ IsSystemProcess(
     _In_ PEPROCESS process
 )
 {
+    KIRQL currentIrql = KeGetCurrentIrql();
+    if (currentIrql > PASSIVE_LEVEL) {
+        return FALSE;
+    }
+
     PAGED_CODE();
 
     if (!process) {
@@ -397,6 +412,11 @@ KillMaliciousProcess(
     _In_ PEPROCESS process
 )
 {
+    KIRQL currentIrql = KeGetCurrentIrql();
+    if (currentIrql > PASSIVE_LEVEL) {
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+
     PAGED_CODE();
 
     if (!process) {

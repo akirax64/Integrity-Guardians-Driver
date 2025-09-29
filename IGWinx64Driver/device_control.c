@@ -10,6 +10,11 @@ InitializeDeviceControl(
 {
 	NTSTATUS status;
 
+	KIRQL currentIrql = KeGetCurrentIrql();
+	if (currentIrql > PASSIVE_LEVEL) {
+		return STATUS_INVALID_DEVICE_STATE;
+	}
+
 	PAGED_CODE();
 
 	DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "IGAR: Initializing Device Control...\n");
@@ -50,6 +55,11 @@ InitializeDeviceControl(
 VOID
 CleanDeviceControl(VOID)
 {
+	KIRQL currentIrql = KeGetCurrentIrql();
+	if (currentIrql > PASSIVE_LEVEL) {
+		return ; 
+	}
+
 	PAGED_CODE();
 
 	DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "IGAR: Cleaning up Device Control...\n");
@@ -108,7 +118,6 @@ ValidateUserBuffer(
 		return FALSE;
 	}
 
-	// Verificação básica de sanidade sem ProbeForRead
 	__try {
 		// Teste simples de acesso de leitura
 		volatile UCHAR testByte = *((volatile PUCHAR)Buffer);
@@ -129,6 +138,11 @@ DeviceControl(
 )
 {
 	UNREFERENCED_PARAMETER(deviceObject);
+
+	KIRQL currentIrql = KeGetCurrentIrql();
+	if (currentIrql > PASSIVE_LEVEL) {
+		return STATUS_INVALID_DEVICE_STATE; 
+	}
 
 	NTSTATUS status = STATUS_SUCCESS;
 	PIO_STACK_LOCATION irpStack;

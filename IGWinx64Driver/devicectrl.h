@@ -12,6 +12,12 @@ InitializeDeviceControl(
 VOID
 CleanDeviceControl(VOID);
 
+BOOLEAN
+ValidateUserBuffer(
+	_In_ PVOID Buffer,
+	_In_ ULONG BufferLength
+);
+
 NTSTATUS
 DeviceCreate(
 	_In_ PDEVICE_OBJECT deviceObject,

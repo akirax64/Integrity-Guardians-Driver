@@ -313,6 +313,11 @@ MessageNotify(
     UNREFERENCED_PARAMETER(inputBuffer);
     UNREFERENCED_PARAMETER(inputBufferLength);
 
+    KIRQL currentIrql = KeGetCurrentIrql();
+    if (currentIrql > PASSIVE_LEVEL) {
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+
     PAGED_CODE();
 
     DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Integrity Guardians AntiRansomware: Message received from user mode! Length: %lu\n", inputBufferLength);
@@ -368,7 +373,7 @@ GetAlert(
     _Out_ PULONG bytesReturned
 )
 {
-    if (KeGetCurrentIrql > PASSIVE_LEVEL)
+    if (KeGetCurrentIrql() > PASSIVE_LEVEL)
     {
 		return STATUS_INVALID_DEVICE_STATE;
     }

@@ -12,6 +12,11 @@ static UNICODE_STRING g_DefaultWhitelist[] = {
 
 NTSTATUS InitializeWhitelist(VOID)
 {
+    KIRQL currentIrql = KeGetCurrentIrql();
+    if (currentIrql > PASSIVE_LEVEL) {
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+
     PAGED_CODE();
 
     DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,
@@ -62,6 +67,10 @@ NTSTATUS InitializeWhitelist(VOID)
 
 BOOLEAN IsPathExcluded(_In_ PUNICODE_STRING PathName)
 {
+    KIRQL currentIrql = KeGetCurrentIrql();
+    if (currentIrql > PASSIVE_LEVEL) {
+        return FALSE;
+    }
     PAGED_CODE();
 
     if (!PathName || !PathName->Buffer || PathName->Length == 0) {
@@ -112,7 +121,12 @@ BOOLEAN IsPathExcluded(_In_ PUNICODE_STRING PathName)
 NTSTATUS
 AddExcludedPath(
     _In_ PUNICODE_STRING UserPath
-) {
+)
+{
+	KIRQL currentIrql = KeGetCurrentIrql();
+    if (currentIrql > PASSIVE_LEVEL) {
+        return STATUS_INVALID_DEVICE_STATE;
+    }
     PAGED_CODE();
 
     if (!UserPath || !UserPath->Buffer ||
@@ -190,6 +204,11 @@ ConvertUserPathToKernelPath(
     _Out_ PUNICODE_STRING KernelPath
 )
 {
+    KIRQL currentIrql = KeGetCurrentIrql();
+    if (currentIrql > PASSIVE_LEVEL) {
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+
     PAGED_CODE();
 
     if (!UserPath || !KernelPath || !UserPath->Buffer || UserPath->Length == 0) {
@@ -260,6 +279,11 @@ RemoveExcludedPath(
     _In_ PUNICODE_STRING Path
 )
 {
+    KIRQL currentIrql = KeGetCurrentIrql();
+    if (currentIrql > PASSIVE_LEVEL) {
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+
     PAGED_CODE();
 
     if (!Path || !Path->Buffer || Path->Length == 0) {
@@ -312,6 +336,11 @@ RemoveExcludedPath(
 
 NTSTATUS ClearExcludedPaths(VOID)
 {
+    KIRQL currentIrql = KeGetCurrentIrql();
+    if (currentIrql > PASSIVE_LEVEL) {
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+
     PAGED_CODE();
 
     PLIST_ENTRY listEntry, nextEntry;
@@ -347,6 +376,11 @@ NTSTATUS ClearExcludedPaths(VOID)
 
 ULONG GetExcludedPathsCount(VOID)
 {
+    KIRQL currentIrql = KeGetCurrentIrql();
+    if (currentIrql > PASSIVE_LEVEL) {
+        return 0;
+    }
+
     PAGED_CODE();
 
     ULONG count = 0;
@@ -382,13 +416,17 @@ GetExcludedPathsList(
     _Out_ PULONG BytesReturned
 )
 {
+    KIRQL currentIrql = KeGetCurrentIrql();
+    if (currentIrql > PASSIVE_LEVEL) {
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+
     PAGED_CODE();
 
     if (!Response || !BytesReturned) {
         return STATUS_INVALID_PARAMETER;
     }
 
-    // Implementação simplificada - usar SerializeExcludedPaths em vez disso
     return SerializeExcludedPaths(Response, ResponseBufferSize, BytesReturned);
 }
 
@@ -399,6 +437,11 @@ SerializeExcludedPaths(
     _Out_ PULONG BytesReturned
 )
 {
+    KIRQL currentIrql = KeGetCurrentIrql();
+    if (currentIrql > PASSIVE_LEVEL) {
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+
     PAGED_CODE();
 
     if (!OutputBuffer || !BytesReturned) {
@@ -504,6 +547,11 @@ SerializeExcludedPaths(
 ULONG
 CalculateExcludedPathsSize(VOID)
 {
+    KIRQL currentIrql = KeGetCurrentIrql();
+    if (currentIrql > PASSIVE_LEVEL) {
+        return 0;
+    }
+
     PAGED_CODE();
 
     ULONG totalSize = sizeof(ULONG); // Cabeçalho
@@ -543,6 +591,11 @@ ValidateUnicodeString(
     _In_ ULONG MaxLength
 )
 {
+    KIRQL currentIrql = KeGetCurrentIrql();
+    if (currentIrql > PASSIVE_LEVEL) {
+        return FALSE;
+    }
+
     PAGED_CODE();
 
     if (!UserModeString) {
@@ -580,6 +633,11 @@ CopyUnicodeStringFromUserMode(
     _Out_ PUNICODE_STRING KernelModeString
 )
 {
+    KIRQL currentIrql = KeGetCurrentIrql();
+    if (currentIrql > PASSIVE_LEVEL) {
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+
     PAGED_CODE();
 
     if (!UserModeString || !KernelModeString) {

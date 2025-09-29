@@ -34,6 +34,7 @@
     <ClInclude Include="mitigation.h" />
     <ClInclude Include="precompiled.h" />
     <ClInclude Include="rules.h" />
+    <ClInclude Include="rulescfg.h" />
     <ClInclude Include="safechk.h" />
     <ClInclude Include="Trace.h" />
     <ClInclude Include="whitelist.h" />
@@ -165,6 +166,7 @@
     <ClCompile Include="main.c" />
     <ClCompile Include="mitigation.c" />
     <ClCompile Include="rules.c" />
+    <ClCompile Include="rules_config.c" />
     <ClCompile Include="whitelist.c" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
