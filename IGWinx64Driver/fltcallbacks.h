@@ -91,4 +91,17 @@ IsWriteOperationSafe(
 	_In_ PFLT_CALLBACK_DATA Data,
 	_In_ KIRQL CurrentIrql
 );
+FLT_PREOP_CALLBACK_STATUS
+ProcessWritePassiveLevel(
+	_Inout_ PFLT_CALLBACK_DATA data,
+	_In_ PCFLT_RELATED_OBJECTS f_Objects
+);
+FLT_PREOP_CALLBACK_STATUS
+ProcessWriteDispatchLevel(
+	_Inout_ PFLT_CALLBACK_DATA data
+);
+FLT_PREOP_CALLBACK_STATUS
+ProcessWriteApcLevel(
+	_Inout_ PFLT_CALLBACK_DATA data
+);
 #endif// !FILTER_CALLBACKS_H

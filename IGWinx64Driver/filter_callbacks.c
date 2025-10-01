@@ -6,7 +6,7 @@ CONST FLT_OPERATION_REGISTRATION Callbacks[] = {
     { IRP_MJ_OPERATION_END }
 };
 
-// inicialização do filter manager 
+// inicializacao do filter manager 
 NTSTATUS
 InitializeFilter(
     _In_ PDRIVER_OBJECT driverObject,
@@ -19,27 +19,22 @@ InitializeFilter(
         return STATUS_INVALID_DEVICE_STATE;
     }
 
-	PAGED_CODE();
-
-	DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,"Integrity Guardians AntiRansomware: Initializing filter driver\n");
+    PAGED_CODE();
 
     // registro do mini-filter
     status = FltRegisterFilter(driverObject, fltRegistration, &g_FilterHandle);
     if (!NT_SUCCESS(status)) {
-        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,"Integrity Guardians Antiransomware: Failed to register filter (0x%X)\n", status);
         return status;
     }
 
     // vai inicializar o mini-filter driver
     status = FltStartFiltering(g_FilterHandle);
     if (!NT_SUCCESS(status)) {
-        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,"Integrity Guardians AntiRansomware: Failed to start filtering (0x%X)\n", status);
         FltUnregisterFilter(g_FilterHandle);
         g_FilterHandle = NULL;
         return status;
     }
 
-    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,"Integrity Guardians AntiRansomware: Filter Manager initialized successfully!\n");
     return STATUS_SUCCESS;
 }
 
@@ -53,15 +48,11 @@ CleanFilter(VOID)
 
     PAGED_CODE();
 
-    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,"Integrity Guardians AntiRansomware: Cleaning up Filter Manager...\n");
-
     // vai desregistrar o mini-filter driver
     if (g_FilterHandle) {
         FltUnregisterFilter(g_FilterHandle);
         g_FilterHandle = NULL;
     }
-
-    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,"Integrity Guardians AntiRansomware: Filter Manager cleaned up.\n");
 }
 
 NTSTATUS FLTAPI
@@ -75,23 +66,13 @@ FilterUnload(
         return STATUS_SUCCESS;
     }
 
-	PAGED_CODE();
-
-    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,
-        "Integrity Guardians AntiRansomware: FilterUnload called. Flags: 0x%X\n", flags);
+    PAGED_CODE();
 
     CleanFilter();
-
     CleanCommunicationPort();
-
     CleanDeviceControl();
-
     FreeRulesList();
-
     ClearExcludedPaths();
-
-    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,
-        "Integrity Guardians AntiRansomware: Filter unloaded successfully.\n");
 
     return STATUS_SUCCESS;
 }
@@ -102,33 +83,34 @@ ProcessWriteDispatchLevel(
     _Inout_ PFLT_CALLBACK_DATA data
 )
 {
-    __try {
-        PUNICODE_STRING fileName = &data->Iopb->TargetFileObject->FileName;
-
-        // verificacao rapida de extensoes suspeitas, ja que o IRQL esta em DISPATCH_LEVEL
-        if (fileName && fileName->Buffer && fileName->Length > 0) {
-            // Buscar ponto final manualmente (sem wcsrchr)
-            PWCHAR buffer = fileName->Buffer;
-            USHORT length = fileName->Length / sizeof(WCHAR);
-            PWCHAR lastDot = NULL;
-
-            for (USHORT i = 0; i < length; i++) {
-                if (buffer[i] == L'.') {
-                    lastDot = &buffer[i];
-                }
-            }
-
-            if (lastDot) {
-                if ((lastDot[0] == L'.' && lastDot[1] == L'c' && lastDot[2] == L'r' && lastDot[3] == L'y' && lastDot[4] == L'p' && lastDot[5] == L't') ||
-                    (lastDot[0] == L'.' && lastDot[1] == L'l' && lastDot[2] == L'o' && lastDot[3] == L'c' && lastDot[4] == L'k' && lastDot[5] == L'e' && lastDot[6] == L'd')) {
-                    BlockSuspiciousOperation(data, STATUS_ACCESS_DENIED);
-                    return FLT_PREOP_COMPLETE;
-                }
-            }
-        }
+    if (KeGetCurrentIrql() != DISPATCH_LEVEL) {
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
-    __except (EXCEPTION_EXECUTE_HANDLER) {
-        // silenciar exceções em IRQL alto
+
+    if (!data || !data->Iopb) {
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
+
+    PMDL mdl = data->Iopb->Parameters.Write.MdlAddress;
+    if (!mdl) {
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
+
+    if (!(mdl->MdlFlags & MDL_PAGES_LOCKED)) {
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
+
+    PVOID writeBuffer = MmGetSystemAddressForMdlSafe(mdl, HighPagePriority);
+    if (!writeBuffer) {
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
+
+    ULONG scanLength = min(data->Iopb->Parameters.Write.Length, 32);
+
+    if (DispatchLevelFastCheck(writeBuffer, scanLength)) {
+        data->IoStatus.Status = STATUS_ACCESS_DENIED;
+        data->IoStatus.Information = 0;
+        return FLT_PREOP_COMPLETE;
     }
 
     return FLT_PREOP_SUCCESS_NO_CALLBACK;
@@ -139,18 +121,22 @@ ProcessWriteApcLevel(
     _Inout_ PFLT_CALLBACK_DATA data
 )
 {
+    if (KeGetCurrentIrql() != APC_LEVEL) {
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
+
     if (!g_driverContext.MonitoringEnabled) {
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
     __try {
-        if (QuickPatternCheckDispatchLevel(data)) {
+        if (QuickPatternCheck(data)) {
             BlockSuspiciousOperation(data, STATUS_ACCESS_DENIED);
             return FLT_PREOP_COMPLETE;
         }
     }
     __except (EXCEPTION_EXECUTE_HANDLER) {
-        // Silenciar exceções
+        // Silenciar excecoes
     }
 
     return FLT_PREOP_SUCCESS_NO_CALLBACK;
@@ -163,11 +149,10 @@ ProcessWritePassiveLevel(
 )
 {
     PAGED_CODE();
-
     return ProcessWriteOperation(data, f_Objects);
 }
 
-// funcao de pré-criação de arquivos
+// pre criacao de arquivos
 FLT_PREOP_CALLBACK_STATUS
 InPreCreate(
     _Inout_ PFLT_CALLBACK_DATA data,
@@ -182,27 +167,73 @@ InPreCreate(
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
-	KIRQL currentIrql = KeGetCurrentIrql();
-    if (currentIrql > PASSIVE_LEVEL) {
+    KIRQL currentIrql = KeGetCurrentIrql();
+
+    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_TRACE_LEVEL,
+        "InPreCreate: IRQL=%d, Monitoring=%d\n",
+        currentIrql, g_driverContext.MonitoringEnabled);
+
+    // Em DISPATCH_LEVEL ou superior, usar verificação ultra-rápida
+    if (currentIrql > APC_LEVEL) {
+        __try {
+            if (!data || !data->Iopb || !data->Iopb->TargetFileObject) {
+                return FLT_PREOP_SUCCESS_NO_CALLBACK;
+            }
+
+            PUNICODE_STRING fileName = &data->Iopb->TargetFileObject->FileName;
+
+            if (SafeExtensionCheckDispatchLevel(fileName)) {
+                BlockSuspiciousOperation(data, STATUS_ACCESS_DENIED);
+                return FLT_PREOP_COMPLETE;
+            }
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) {
+            return FLT_PREOP_SUCCESS_NO_CALLBACK;
+        }
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
-	PAGED_CODE();
+    if (currentIrql == PASSIVE_LEVEL) {
+        PAGED_CODE();
+    }
 
     __try {
-        PUNICODE_STRING fileName = &data->Iopb->TargetFileObject->FileName;
-
-        if (!MmIsAddressValid(fileName) || !MmIsAddressValid(fileName->Buffer)) {
+        if (!data || !data->Iopb || !data->Iopb->TargetFileObject) {
             return FLT_PREOP_SUCCESS_NO_CALLBACK;
         }
 
-        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,
-            "PreCreate - File: %wZ\n", fileName);
+        PUNICODE_STRING fileName = &data->Iopb->TargetFileObject->FileName;
 
-		// bloquear criação de arquivos com extensões suspeitas
-        if (IsSuspiciousExtension(fileName)) {
+        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,
+            "InPreCreate: Checking %wZ at IRQL %d\n", fileName, currentIrql);
+
+        BOOLEAN isSuspicious = FALSE;
+
+        if (currentIrql == PASSIVE_LEVEL) {
+            // VERIFICAÇÃO COMPLETA: lista estática + regras dinâmicas
+            isSuspicious = FullExtensionCheck(fileName);
+
             DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,
-                "BLOCKING suspicious file creation: %wZ\n", fileName);
+                "FullExtensionCheck result: %d for %wZ\n", isSuspicious, fileName);
+        }
+        else {
+            // APC_LEVEL: verificação rápida apenas
+            isSuspicious = QuickExtensionCheck(fileName);
+        }
+
+        if (isSuspicious) {
+            DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL,
+                "ALERT: Suspicious file creation BLOCKED: %wZ\n", fileName);
+
+            // Enviar alerta para user-mode
+            UNICODE_STRING alertMsg = RTL_CONSTANT_STRING(L"Blocked suspicious extension");
+            AlertToUserMode(
+                fileName,
+                PsGetCurrentProcessId(),
+                PsGetCurrentThreadId(),
+                RULE_FLAG_MATCH,
+                &alertMsg
+            );
 
             BlockSuspiciousOperation(data, STATUS_ACCESS_DENIED);
             return FLT_PREOP_COMPLETE;
@@ -210,14 +241,14 @@ InPreCreate(
     }
     __except (EXCEPTION_EXECUTE_HANDLER) {
         DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL,
-            "EXCEPTION in InPreCreate: 0x%X\n", GetExceptionCode());
+            "InPreCreate: Exception 0x%X\n", GetExceptionCode());
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
     return FLT_PREOP_SUCCESS_NO_CALLBACK;
 }
 
-// função de pós-criação de arquivos
+// funcao de pos-criacao de arquivos
 FLT_POSTOP_CALLBACK_STATUS
 InPostCreate(
     _Inout_ PFLT_CALLBACK_DATA data,
@@ -231,17 +262,14 @@ InPostCreate(
     UNREFERENCED_PARAMETER(context);
     UNREFERENCED_PARAMETER(flags);
 
-    //se o monitoramento não estiver habilitado, finaliza a operação
     if (!g_driverContext.MonitoringEnabled) {
         return FLT_POSTOP_FINISHED_PROCESSING;
     }
 
-    // Lógica para verificar o resultado da criação, ou para limpar recursos
     return FLT_POSTOP_FINISHED_PROCESSING;
-
 }
 
-// Função de pré-escrita de arquivos
+// Funcao de pre-escrita de arquivos
 FLT_PREOP_CALLBACK_STATUS
 InPreWrite(
     _Inout_ PFLT_CALLBACK_DATA data,
@@ -258,20 +286,18 @@ InPreWrite(
 
     KIRQL currentIrql = KeGetCurrentIrql();
 
-    if (currentIrql == PASSIVE_LEVEL) {
-        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,
-            "InPreWrite: IRQL=%d, Length=%lu\n", currentIrql, data->Iopb->Parameters.Write.Length);
-    }
-
-    if (currentIrql > APC_LEVEL) {
+    if (currentIrql == DISPATCH_LEVEL) {
         return ProcessWriteDispatchLevel(data);
     }
-    if (currentIrql == APC_LEVEL) {
+    else if (currentIrql == APC_LEVEL) {
         return ProcessWriteApcLevel(data);
     }
+    else if (currentIrql == PASSIVE_LEVEL) {
+        PAGED_CODE();
+        return ProcessWritePassiveLevel(data, f_Objects);
+    }
 
-    PAGED_CODE();
-    return ProcessWritePassiveLevel(data, f_Objects);
+    return FLT_PREOP_SUCCESS_NO_CALLBACK;
 }
 
 FLT_PREOP_CALLBACK_STATUS
@@ -286,21 +312,19 @@ ProcessWriteOperation(
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
-    // Validações extensivas
     if (!IsFltCallbackDataValid(data)) {
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
     PUNICODE_STRING fileName = &data->Iopb->TargetFileObject->FileName;
 
-    // Verificar extensão suspeita
+    // Verificar extensao suspeita
     if (IsSuspiciousExtension(fileName)) {
-        DbgPrintEx(DPFLTR_IHVDRIVER_ID,DPFLTR_INFO_LEVEL, "Blocking suspicious file: %wZ\n", fileName);
         BlockSuspiciousOperation(data, STATUS_ACCESS_DENIED);
         return FLT_PREOP_COMPLETE;
     }
 
-    // Verificar se está excluído
+    // Verificar se esta excluÌdo
     if (IsPathExcludedFromDetection(fileName)) {
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
@@ -319,13 +343,11 @@ ProcessWriteOperation(
     ULONG scanLength = min(iopb->Parameters.Write.Length, 8192);
 
     if (ScanBuffer(writeBuffer, scanLength, fileName, IoGetCurrentProcess())) {
-        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Blocking malicious write to %wZ\n", fileName);
-
         // Backup se configurado
         if (g_driverContext.BackupOnDetection) {
             NTSTATUS backupStatus = BackupFile(data->Iopb->TargetFileObject, fileName, f_Objects->Instance);
             if (!NT_SUCCESS(backupStatus)) {
-                DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_WARNING_LEVEL, "Backup failed: 0x%X\n", backupStatus);
+
             }
         }
 
@@ -336,7 +358,7 @@ ProcessWriteOperation(
     return FLT_PREOP_SUCCESS_NO_CALLBACK;
 }
 
-// função de pós-escrita de arquivos
+// funcao de pos-escrita de arquivos
 FLT_POSTOP_CALLBACK_STATUS
 InPostWrite(
     _Inout_ PFLT_CALLBACK_DATA data,
@@ -350,7 +372,6 @@ InPostWrite(
     UNREFERENCED_PARAMETER(context);
     UNREFERENCED_PARAMETER(flags);
 
-	// Se o monitoramento não estiver habilitado, finaliza a operação
     if (!g_driverContext.MonitoringEnabled) {
         return FLT_POSTOP_FINISHED_PROCESSING;
     }
@@ -358,7 +379,7 @@ InPostWrite(
     return FLT_POSTOP_FINISHED_PROCESSING;
 }
 
-// funçoes para gerenciar instâncias do mini-filter driver
+// funcoes para gerenciar instancias do mini-filter
 NTSTATUS FLTAPI
 InstanceConfig(
     _In_ PCFLT_RELATED_OBJECTS fltObjects,
@@ -372,13 +393,10 @@ InstanceConfig(
     UNREFERENCED_PARAMETER(volumeDeviceType);
     UNREFERENCED_PARAMETER(volumeFilesystemType);
 
-    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,"Integrity Guardians AntiRansomware: InstanceConfig - Attaching to volume\n");
-
-	// criar logica para "quarentena" de volumes suspeitos ou não monitorados
-    return STATUS_SUCCESS; // Permite anexar a instância ao volume
+    return STATUS_SUCCESS;
 }
 
-// função de consulta de desmontagem de instância
+// funcao de consulta de desmontagem de instancia
 NTSTATUS FLTAPI
 InstanceQueryTeardown(
     _In_ PCFLT_RELATED_OBJECTS fltObjects,
@@ -387,13 +405,11 @@ InstanceQueryTeardown(
 {
     UNREFERENCED_PARAMETER(fltObjects);
     UNREFERENCED_PARAMETER(flags);
-    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,"Integrity Guardians AntiRansomware: InstanceQueryTeardown\n");
 
-	// implementar lógica para verificar se a instância pode ser desmontada
-	return STATUS_SUCCESS; // Permite a desmontagem se não houver problemas
+    return STATUS_SUCCESS;
 }
 
-// inicializacao da consulta de desmontagem de instância
+// inicializacao da consulta de desmontagem de instancia
 VOID FLTAPI
 InstanceTeardownStart(
     _In_ PCFLT_RELATED_OBJECTS f_Objects,
@@ -402,12 +418,9 @@ InstanceTeardownStart(
 {
     UNREFERENCED_PARAMETER(f_Objects);
     UNREFERENCED_PARAMETER(flags);
-    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,"Integrity Guardians AntiRansomware: InstanceTeardownStart\n");
-
-	// implementar lógica para iniciar desmontagem de instância
 }
 
-// finalização da consulta de desmontagem de instância
+// finalizacao da consulta de desmontagem de instancia
 VOID FLTAPI
 InstanceTeardownComplete(
     _In_ PCFLT_RELATED_OBJECTS f_Objects,
@@ -416,9 +429,6 @@ InstanceTeardownComplete(
 {
     UNREFERENCED_PARAMETER(f_Objects);
     UNREFERENCED_PARAMETER(flags);
-    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,"Integrity Guardians AntiRansomware: InstanceTeardownComplete\n");
-
-	// logica para finalizar desmontagem de instância
 }
 
 __forceinline
@@ -432,21 +442,16 @@ IsWriteOperationSafe(
         return FALSE;
     }
 
-    // CORREÇÃO: Limitações extremamente conservadoras
     switch (CurrentIrql) {
     case PASSIVE_LEVEL:
-        return TRUE; // Operações completas permitidas
-
+        return TRUE;
     case APC_LEVEL:
-        // Apenas verificações muito básicas
         if (Data->Iopb->Parameters.Write.Length > 8192) {
             return FALSE;
         }
         return TRUE;
-
     case DISPATCH_LEVEL:
     default:
-        // Apenas verificação de extensão de arquivo
-        return TRUE;
+        return FALSE;
     }
 }
