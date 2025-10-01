@@ -64,6 +64,8 @@ BroadcastAlertToClients(
     _In_ PTR_ALERT_DATA AlertData
 );
 NTSTATUS
+QueueAlertDataForLaterProcessing(_In_ PTR_ALERT_DATA AlertData);
+NTSTATUS
 QueueAlertForLaterProcessing(
     _In_ PUNICODE_STRING fileName,
     _In_ HANDLE processId,
