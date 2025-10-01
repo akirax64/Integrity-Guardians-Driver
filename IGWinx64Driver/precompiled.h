@@ -18,4 +18,7 @@
 #include "devicectrl.h"     
 #include "fltcallbacks.h"   
 #include "main.h"
+#include "rulescfg.h"
+#include "behaviordet.h"
+
 #endif // PRECOMPILED_H

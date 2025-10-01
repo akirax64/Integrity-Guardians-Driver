@@ -16,14 +16,64 @@ typedef struct RULE_INFO {
     // adicionar outros campos conforme necessário, como expressões regulares, etc.
 } RULE_INFO, * PTR_RULE_INFO;
 
+// Array de regras pré-definidas usando a estrutura existente
+typedef struct RULE_DEFINITION {
+    CHAR* RuleName;
+    UCHAR* Pattern;
+    ULONG PatternLength;
+    ULONG Flags;
+} RULE_DEFINITION, * PTR_RULE_DEFINITION;
 
-// Estrutura para cabeçalho serializado (deve corresponder ao user-mode)
+// struct para tracking de comportamento
+typedef struct _BEHAVIOR_TRACKER {
+    LIST_ENTRY ListEntry;
+    HANDLE ProcessId;
+    PEPROCESS ProcessObject;
+    UNICODE_STRING ProcessName;
+
+    // Métricas de comportamento
+    ULONG FilesModified;
+    ULONG FilesRenamed;
+    ULONG FilesDeleted;
+    ULONG TotalBytesWritten;
+    ULONG HighEntropyWrites;
+
+    // Timestamps
+    LARGE_INTEGER FirstDetectionTime;
+    LARGE_INTEGER LastDetectionTime;
+    LARGE_INTEGER LastAlertTime;
+
+    // Estados
+    BOOLEAN AlertTriggered;
+    BOOLEAN ProcessTerminated;
+    ULONG AlertCount;
+
+    // Pontuação de risco
+    ULONG RiskScore;
+
+} BEHAVIOR_TRACKER, * PTR_BEHAVIOR_TRACKER;
+
+// struct de detecção comportamental
+typedef struct _BEHAVIOR_CONFIG {
+    ULONG MaxFilesPerMinute;
+    ULONG MaxBytesPerMinute;
+    ULONG EntropyThreshold;
+    ULONG RiskScoreThreshold;
+    ULONG MaxAlertsPerProcess;
+    ULONG FileExtensionChangesThreshold;
+} BEHAVIOR_CONFIG, * PBEHAVIOR_CONFIG;
+
+// Estrutura para cabeçalho serializado
 #pragma pack(push, 1)
 typedef struct SERIALIZED_RULE_HEADER {
-    ULONG   Id;
-    ULONG  Flags;
-    USHORT RuleNameLength;
-    ULONG  PatternLength;
+    ULONG   Id;                 
+    ULONG   Type;                
+    ULONG   Flags;               
+    USHORT  RuleNameLength;     
+    USHORT  TargetPathLength;    
+    ULONG   PatternLength;       
+    ULONG   MinFileSize;        
+    ULONG   MaxFileSize;         
 } SERIALIZED_RULE_HEADER, * PTR_SERIALIZED_RULE_HEADER;
 #pragma pack(pop)
 
@@ -94,8 +144,8 @@ typedef struct DRIVER_CONTEXT {
 } DRIVER_CONTEXT, * PTR_DRIVER_CONTEXT;
 
 typedef enum DETECTION_MODE {
-    DetectionModePassive = 0,   
-    DetectionModeActive = 1,    
+    DetectionModePassive = 0,
+    DetectionModeActive = 1,
     DetectionModeMonitorOnly = 2,
 } DETECTION_MODE, * PTR_DETECTION_MODE;
 
@@ -109,6 +159,6 @@ typedef struct MONITORING_CONFIG {
 typedef struct EXCLUDED_PATHS_RESPONSE {
     ULONG NumberOfPaths;
     ULONG TotalBufferSize;
-    WCHAR PathsBuffer[1];  
+    WCHAR PathsBuffer[1];
 } EXCLUDED_PATHS_RESPONSE, * PTR_EXCLUDED_PATHS_RESPONSE;
 #endif
