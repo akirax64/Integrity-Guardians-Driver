@@ -1,6 +1,5 @@
 #include "precompiled.h"
 
-// Whitelist paths padrão
 static UNICODE_STRING g_DefaultWhitelist[] = {
     RTL_CONSTANT_STRING(L"\\Windows\\"),
     RTL_CONSTANT_STRING(L"\\Program Files\\"),
@@ -22,7 +21,14 @@ NTSTATUS InitializeWhitelist(VOID)
     DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,
         "Whitelist: Initializing default entries\n");
 
-    ExAcquirePushLockExclusive(&g_driverContext.ExcludedPathsLock);
+    // CORREÇÃO: Usar timeout
+    NTSTATUS lockStatus = AcquirePushLockExclusiveWithTimeout(
+        &g_driverContext.ExcludedPathsLock, 100);
+    if (!NT_SUCCESS(lockStatus)) {
+        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL,
+            "InitializeWhitelist: Failed to acquire lock: 0x%X\n", lockStatus);
+        return lockStatus;
+    }
 
     __try {
         for (ULONG i = 0; i < ARRAYSIZE(g_DefaultWhitelist); i++) {
@@ -45,9 +51,11 @@ NTSTATUS InitializeWhitelist(VOID)
                 continue;
             }
 
-            RtlCopyMemory(entry->Path.Buffer, g_DefaultWhitelist[i].Buffer, g_DefaultWhitelist[i].Length);
+            RtlCopyMemory(entry->Path.Buffer, g_DefaultWhitelist[i].Buffer,
+                g_DefaultWhitelist[i].Length);
             entry->Path.Length = g_DefaultWhitelist[i].Length;
             entry->Path.MaximumLength = g_DefaultWhitelist[i].Length + sizeof(WCHAR);
+            entry->Path.Buffer[entry->Path.Length / sizeof(WCHAR)] = L'\0';
             entry->IsExcluded = TRUE;
 
             InsertTailList(&g_driverContext.ExcludedPathsList, &entry->ListEntry);
@@ -71,6 +79,7 @@ BOOLEAN IsPathExcluded(_In_ PUNICODE_STRING PathName)
     if (currentIrql > PASSIVE_LEVEL) {
         return FALSE;
     }
+
     PAGED_CODE();
 
     if (!PathName || !PathName->Buffer || PathName->Length == 0) {
@@ -81,7 +90,13 @@ BOOLEAN IsPathExcluded(_In_ PUNICODE_STRING PathName)
     PLIST_ENTRY listEntry;
     PTR_IS_MONITORED_PATH_INFO entry;
 
-    ExAcquirePushLockShared(&g_driverContext.ExcludedPathsLock);
+    NTSTATUS lockStatus = AcquirePushLockSharedWithTimeout(
+        &g_driverContext.ExcludedPathsLock, 50);
+    if (!NT_SUCCESS(lockStatus)) {
+        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_WARNING_LEVEL,
+            "IsPathExcluded: Failed to acquire lock: 0x%X\n", lockStatus);
+        return FALSE;
+    }
 
     __try {
         for (listEntry = g_driverContext.ExcludedPathsList.Flink;
@@ -118,60 +133,21 @@ BOOLEAN IsPathExcluded(_In_ PUNICODE_STRING PathName)
     return isExcluded;
 }
 
-NTSTATUS
-AddExcludedPath(
-    _In_ PUNICODE_STRING UserPath
-)
+NTSTATUS AddExcludedPath(_In_ PUNICODE_STRING UserPath)
 {
-	KIRQL currentIrql = KeGetCurrentIrql();
-    if (currentIrql > PASSIVE_LEVEL) {
-        return STATUS_INVALID_DEVICE_STATE;
-    }
-    PAGED_CODE();
+    UNICODE_STRING KernelPath = { 0 };
+    NTSTATUS status;
 
-    if (!UserPath || !UserPath->Buffer ||
-        UserPath->Length == 0 || UserPath->Length > 4000 ||
-        (UserPath->Length % sizeof(WCHAR)) != 0) {
-
-        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL,
-            "AddExcludedPath: Invalid UserPath parameters\n");
+    if (!UserPath || !UserPath->Buffer) {
         return STATUS_INVALID_PARAMETER;
     }
 
-    __try {
-        for (USHORT i = 0; i < UserPath->Length / sizeof(WCHAR); i++) {
-            WCHAR ch = UserPath->Buffer[i];
-            if (ch == L'\0') {
-                // String terminada prematuramente
-                if (i < (UserPath->Length / sizeof(WCHAR)) - 1) {
-                    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL,
-                        "AddExcludedPath: Null terminator found at position %u\n", i);
-                    return STATUS_INVALID_PARAMETER;
-                }
-                break;
-            }
-        }
-    }
-    __except (EXCEPTION_EXECUTE_HANDLER) {
-        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL,
-            "AddExcludedPath: Exception validating string: 0x%X\n", GetExceptionCode());
-        return GetExceptionCode();
-    }
-
-
-
-    NTSTATUS status = STATUS_SUCCESS;
-    UNICODE_STRING KernelPath;
-    RtlZeroMemory(&KernelPath, sizeof(UNICODE_STRING));
-
     status = ConvertUserPathToKernelPath(UserPath, &KernelPath);
     if (!NT_SUCCESS(status)) {
-        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL,
-            "AddExcludedPath: Falha ao converter path: 0x%X\n", status);
         return status;
     }
 
-    PTR_IS_MONITORED_PATH_INFO entry = (PTR_IS_MONITORED_PATH_INFO)ExAllocatePool2(
+    PTR_IS_MONITORED_PATH_INFO entry = ExAllocatePool2(
         POOL_FLAG_PAGED, sizeof(IS_MONITORED_PATH_INFO), TAG_PATTERN);
 
     if (!entry) {
@@ -182,18 +158,22 @@ AddExcludedPath(
     }
 
     RtlZeroMemory(entry, sizeof(IS_MONITORED_PATH_INFO));
-
-    entry->Path.Buffer = KernelPath.Buffer; // Já alocado pela função de conversão
-    entry->Path.Length = KernelPath.Length;
-    entry->Path.MaximumLength = KernelPath.MaximumLength;
+    entry->Path = KernelPath;
     entry->IsExcluded = TRUE;
 
-    ExAcquirePushLockExclusive(&g_driverContext.ExcludedPathsLock);
+    // CORREÇÃO: Usar timeout
+    NTSTATUS lockStatus = AcquirePushLockExclusiveWithTimeout(
+        &g_driverContext.ExcludedPathsLock, 100);
+    if (!NT_SUCCESS(lockStatus)) {
+        if (KernelPath.Buffer) {
+            ExFreePoolWithTag(KernelPath.Buffer, TAG_RULE_NAME);
+        }
+        ExFreePoolWithTag(entry, TAG_PATTERN);
+        return lockStatus;
+    }
+
     InsertTailList(&g_driverContext.ExcludedPathsList, &entry->ListEntry);
     ExReleasePushLockExclusive(&g_driverContext.ExcludedPathsLock);
-
-    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,
-        "Whitelist: Added path (User: %wZ -> Kernel: %wZ)\n", UserPath, &entry->Path);
 
     return STATUS_SUCCESS;
 }
@@ -221,7 +201,6 @@ ConvertUserPathToKernelPath(
     KernelPath->MaximumLength = 0;
 
     __try {
-        // Verificar se é um path no formato de drive (ex: "C:\Windows")
         BOOLEAN isDrivePath = (UserPath->Length >= 3 * sizeof(WCHAR)) &&
             (UserPath->Buffer[1] == L':') &&
             (UserPath->Buffer[2] == L'\\');
@@ -230,8 +209,7 @@ ConvertUserPathToKernelPath(
         USHORT sourceOffset = 0;
 
         if (isDrivePath) {
-            // Pular a letra do drive (ex: "C:\" -> "\")
-            sourceOffset = 2 * sizeof(WCHAR); // Pular "C:"
+            sourceOffset = 2 * sizeof(WCHAR);
             newLength = UserPath->Length - sourceOffset;
 
             DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,
@@ -239,15 +217,13 @@ ConvertUserPathToKernelPath(
                 sourceOffset, newLength);
         }
 
-        // Alocar buffer para o kernel
-        USHORT allocSize = newLength + sizeof(WCHAR); // + null terminator
+        USHORT allocSize = newLength + sizeof(WCHAR);
         KernelPath->Buffer = (PWSTR)ExAllocatePool2(POOL_FLAG_PAGED, allocSize, TAG_RULE_NAME);
 
         if (!KernelPath->Buffer) {
             return STATUS_INSUFFICIENT_RESOURCES;
         }
 
-        // Copiar dados
         if (newLength > 0) {
             RtlCopyMemory(KernelPath->Buffer,
                 (PUCHAR)UserPath->Buffer + sourceOffset,
@@ -256,8 +232,6 @@ ConvertUserPathToKernelPath(
 
         KernelPath->Length = newLength;
         KernelPath->MaximumLength = allocSize;
-
-        // Garantir null termination
         KernelPath->Buffer[newLength / sizeof(WCHAR)] = L'\0';
 
         return STATUS_SUCCESS;
@@ -292,17 +266,23 @@ RemoveExcludedPath(
 
     NTSTATUS status = STATUS_NOT_FOUND;
 
-    ExAcquirePushLockExclusive(&g_driverContext.ExcludedPathsLock);
+    // CORREÇÃO: Usar timeout
+    NTSTATUS lockStatus = AcquirePushLockExclusiveWithTimeout(
+        &g_driverContext.ExcludedPathsLock, 100);
+    if (!NT_SUCCESS(lockStatus)) {
+        return lockStatus;
+    }
 
     __try {
         PLIST_ENTRY listEntry, nextEntry;
 
         for (listEntry = g_driverContext.ExcludedPathsList.Flink;
             listEntry != &g_driverContext.ExcludedPathsList;
-            listEntry = nextEntry){
+            listEntry = nextEntry) {
 
-            nextEntry = listEntry->Flink; 
-            PTR_IS_MONITORED_PATH_INFO entry = CONTAINING_RECORD(listEntry, IS_MONITORED_PATH_INFO, ListEntry);
+            nextEntry = listEntry->Flink;
+            PTR_IS_MONITORED_PATH_INFO entry = CONTAINING_RECORD(
+                listEntry, IS_MONITORED_PATH_INFO, ListEntry);
 
             if (!entry->IsExcluded) continue;
 
@@ -346,7 +326,12 @@ NTSTATUS ClearExcludedPaths(VOID)
     PLIST_ENTRY listEntry, nextEntry;
     PTR_IS_MONITORED_PATH_INFO entry;
 
-    ExAcquirePushLockExclusive(&g_driverContext.ExcludedPathsLock);
+    // CORREÇÃO: Usar timeout
+    NTSTATUS lockStatus = AcquirePushLockExclusiveWithTimeout(
+        &g_driverContext.ExcludedPathsLock, 100);
+    if (!NT_SUCCESS(lockStatus)) {
+        return lockStatus;
+    }
 
     __try {
         for (listEntry = g_driverContext.ExcludedPathsList.Flink;
@@ -387,7 +372,13 @@ ULONG GetExcludedPathsCount(VOID)
     PLIST_ENTRY listEntry;
     PTR_IS_MONITORED_PATH_INFO entry;
 
-    ExAcquirePushLockShared(&g_driverContext.ExcludedPathsLock);
+    NTSTATUS lockStatus = AcquirePushLockSharedWithTimeout(
+        &g_driverContext.ExcludedPathsLock, 50);
+    if (!NT_SUCCESS(lockStatus)) {
+        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_WARNING_LEVEL,
+            "GetExcludedPathsCount: Failed to acquire lock: 0x%X\n", lockStatus);
+        return 0;
+    }
 
     __try {
         for (listEntry = g_driverContext.ExcludedPathsList.Flink;
@@ -456,7 +447,6 @@ SerializeExcludedPaths(
     DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,
         "SerializeExcludedPaths: Buffer size: %lu bytes\n", OutputBufferLength);
 
-    // Cabeçalho: número de paths
     if (bytesUsed + sizeof(ULONG) > OutputBufferLength) {
         return STATUS_BUFFER_TOO_SMALL;
     }
@@ -466,7 +456,13 @@ SerializeExcludedPaths(
     currentPos += sizeof(ULONG);
     bytesUsed += sizeof(ULONG);
 
-    ExAcquirePushLockShared(&g_driverContext.ExcludedPathsLock);
+    NTSTATUS lockStatus = AcquirePushLockSharedWithTimeout(
+        &g_driverContext.ExcludedPathsLock, 50);
+    if (!NT_SUCCESS(lockStatus)) {
+        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_WARNING_LEVEL,
+            "SerializeExcludedPaths: Failed to acquire lock: 0x%X\n", lockStatus);
+        return lockStatus;
+    }
 
     __try
     {
@@ -474,7 +470,6 @@ SerializeExcludedPaths(
         PTR_IS_MONITORED_PATH_INFO entry;
         ULONG maxPaths = 1000;
 
-        // Serializar paths da lista
         for (listEntry = g_driverContext.ExcludedPathsList.Flink;
             listEntry != &g_driverContext.ExcludedPathsList && pathsSerialized < maxPaths;
             listEntry = listEntry->Flink)
@@ -486,27 +481,22 @@ SerializeExcludedPaths(
                 continue;
             }
 
-            // Calcular tamanho necessário
             ULONG pathDataSize = entry->Path.Length + sizeof(WCHAR);
             ULONG totalEntrySize = sizeof(ULONG) + pathDataSize;
 
-            // Verificar se cabe no buffer
             if (bytesUsed + totalEntrySize > OutputBufferLength) {
                 DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_WARNING_LEVEL,
-                    "SerializeExcludedPaths: Buffer cheio após %lu paths\n", pathsSerialized);
+                    "SerializeExcludedPaths: Buffer full after %lu paths\n", pathsSerialized);
                 break;
             }
 
-            // Escrever campo Size
             PULONG sizeField = (PULONG)currentPos;
             *sizeField = totalEntrySize;
             currentPos += sizeof(ULONG);
             bytesUsed += sizeof(ULONG);
 
-            // Copiar dados da string
             RtlCopyMemory(currentPos, entry->Path.Buffer, entry->Path.Length);
 
-            // Adicionar terminador nulo
             PWSTR stringEnd = (PWSTR)((PUCHAR)currentPos + entry->Path.Length);
             *stringEnd = L'\0';
 
@@ -518,7 +508,6 @@ SerializeExcludedPaths(
                 "SerializeExcludedPaths: Path %lu: %wZ\n", pathsSerialized, &entry->Path);
         }
 
-        // Atualizar cabeçalho
         *pathCountHeader = pathsSerialized;
         *BytesReturned = bytesUsed;
 
@@ -537,7 +526,7 @@ SerializeExcludedPaths(
             *pathCountHeader = 0;
             *BytesReturned = sizeof(ULONG);
         }
-    } 
+    }
 
     ExReleasePushLockShared(&g_driverContext.ExcludedPathsLock);
 
@@ -554,13 +543,18 @@ CalculateExcludedPathsSize(VOID)
 
     PAGED_CODE();
 
-    ULONG totalSize = sizeof(ULONG); // Cabeçalho
+    ULONG totalSize = sizeof(ULONG);
     ULONG pathCount = 0;
     PLIST_ENTRY listEntry;
     PTR_IS_MONITORED_PATH_INFO entry;
     ULONG maxPaths = 1000;
 
-    ExAcquirePushLockShared(&g_driverContext.ExcludedPathsLock);
+    // CORREÇÃO: Usar timeout
+    NTSTATUS lockStatus = AcquirePushLockSharedWithTimeout(
+        &g_driverContext.ExcludedPathsLock, 50);
+    if (!NT_SUCCESS(lockStatus)) {
+        return sizeof(ULONG);
+    }
 
     __try {
         for (listEntry = g_driverContext.ExcludedPathsList.Flink;
@@ -584,7 +578,6 @@ CalculateExcludedPathsSize(VOID)
     return totalSize;
 }
 
-// Função auxiliar para validar UNICODE_STRING do user mode
 BOOLEAN
 ValidateUnicodeString(
     _In_ PUNICODE_STRING UserModeString,
@@ -603,16 +596,12 @@ ValidateUnicodeString(
     }
 
     __try {
-        // Os dados já estão em kernel space
-
-        // Verificar limites do Length
         if (UserModeString->Length > MaxLength ||
             UserModeString->Length % sizeof(WCHAR) != 0) {
             return FALSE;
         }
 
         if (UserModeString->Buffer && UserModeString->Length > 0) {
-            // Teste simples de acesso
             volatile WCHAR testChar = UserModeString->Buffer[0];
             UNREFERENCED_PARAMETER(testChar);
         }
@@ -626,7 +615,6 @@ ValidateUnicodeString(
     }
 }
 
-// Função para copiar UNICODE_STRING do user mode para kernel mode
 NTSTATUS
 CopyUnicodeStringFromUserMode(
     _In_ PUNICODE_STRING UserModeString,
@@ -652,13 +640,11 @@ CopyUnicodeStringFromUserMode(
             return STATUS_INVALID_PARAMETER;
         }
 
-        // Se for string vazia, retornar sucesso
         if (UserModeString->Length == 0) {
             RtlInitUnicodeString(KernelModeString, NULL);
             return STATUS_SUCCESS;
         }
 
-        // Alocar buffer no kernel
         KernelModeString->Buffer = (PWSTR)ExAllocatePool2(
             POOL_FLAG_PAGED, UserModeString->Length + sizeof(WCHAR), TAG_RULE_NAME);
 
@@ -666,12 +652,9 @@ CopyUnicodeStringFromUserMode(
             return STATUS_INSUFFICIENT_RESOURCES;
         }
 
-        // Copiar dados
         RtlCopyMemory(KernelModeString->Buffer, UserModeString->Buffer, UserModeString->Length);
         KernelModeString->Length = UserModeString->Length;
         KernelModeString->MaximumLength = UserModeString->Length + sizeof(WCHAR);
-
-        // Adicionar terminador nulo
         KernelModeString->Buffer[UserModeString->Length / sizeof(WCHAR)] = L'\0';
 
         return STATUS_SUCCESS;
