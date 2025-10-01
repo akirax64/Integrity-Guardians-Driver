@@ -65,7 +65,6 @@
         } \
     } while (0)
 
-// Verificação robusta de integridade de LIST_ENTRY
 __forceinline
 BOOLEAN
 IsListEntryValid(_In_ PLIST_ENTRY Entry)
@@ -84,7 +83,7 @@ IsListEntryValid(_In_ PLIST_ENTRY Entry)
 
         // Verificar alinhamento básico
         if (((ULONG_PTR)Entry & (sizeof(ULONG_PTR) - 1)) != 0) {
-            return FALSE; // Não alinhado
+            return FALSE; 
         }
 
         return TRUE;
@@ -94,19 +93,18 @@ IsListEntryValid(_In_ PLIST_ENTRY Entry)
     }
 }
 
-// Verificação de integridade de lista completa
 __forceinline
 BOOLEAN
 IsListValid(_In_ PLIST_ENTRY ListHead)
 {
     if (!IsListEntryValid(ListHead) || IsListEmpty(ListHead)) {
-        return TRUE; // Lista vazia é válida
+        return TRUE; 
     }
 
     __try {
         PLIST_ENTRY current = ListHead->Flink;
         ULONG count = 0;
-        ULONG maxEntries = 10000; // Limite de segurança
+        ULONG maxEntries = 10000;
 
         while (current != ListHead && count < maxEntries) {
             if (!IsListEntryValid(current)) {
@@ -127,7 +125,7 @@ IsListValid(_In_ PLIST_ENTRY ListHead)
             }
         }
 
-        return (current == ListHead); // Deve voltar ao head
+        return (current == ListHead); 
     }
     __except (EXCEPTION_EXECUTE_HANDLER) {
         return FALSE;
@@ -139,6 +137,10 @@ __forceinline
 BOOLEAN
 IsFltCallbackDataValid(_In_ PFLT_CALLBACK_DATA Data)
 {
+    if (KeGetCurrentIrql() > DISPATCH_LEVEL) {
+        return FALSE;
+    }
+
     if (Data == NULL) return FALSE;
 
     __try {
@@ -148,7 +150,6 @@ IsFltCallbackDataValid(_In_ PFLT_CALLBACK_DATA Data)
             return FALSE;
         }
 
-        // Verificar parâmetros básicos de I/O
         if (Data->Iopb->Parameters.Write.Length > (1024 * 1024 * 1024)) { // 1GB máximo
             return FALSE;
         }
@@ -169,7 +170,7 @@ AcquirePushLockExclusiveWithTimeout(
 )
 {
     LARGE_INTEGER timeout;
-    timeout.QuadPart = -10000LL * TimeoutMs; // Converter para 100ns units
+	timeout.QuadPart = -10000LL * TimeoutMs; // Converter para 100 nanossegundos
 
     for (ULONG i = 0; i < 3; i++) { // 3 tentativas
         if (ExTryAcquirePushLockExclusive(Lock)) {
@@ -186,7 +187,6 @@ AcquirePushLockExclusiveWithTimeout(
         STATUS_SUCCESS : STATUS_TIMEOUT;
 }
 
-// ? ADICIONAR ESTA FUNÇÃO
 __forceinline
 SIZE_T
 SafeCompareMemory(
@@ -195,15 +195,13 @@ SafeCompareMemory(
     _In_ SIZE_T Length
 )
 {
-    // CORREÇÃO: Validações mais rigorosas
     if (!Source1 || !Source2 || Length == 0 || Length > 4096) {
         return 0;
     }
 
-    // CORREÇÃO CRÍTICA: Não executar em IRQL alto
     KIRQL currentIrql = KeGetCurrentIrql();
     if (currentIrql > APC_LEVEL) {
-        return 0; // Retorna imediatamente em IRQL alto
+        return 0; 
     }
 
     SIZE_T result = 0;
@@ -219,7 +217,6 @@ SafeCompareMemory(
         const UCHAR* src1 = (const UCHAR*)Source1;
         const UCHAR* src2 = (const UCHAR*)Source2;
 
-        // Limitar ainda mais em IRQL APC_LEVEL
         SIZE_T safeLength = (currentIrql == APC_LEVEL) ? min(Length, 64) : Length;
 
         for (SIZE_T i = 0; i < safeLength; i++) {
@@ -370,4 +367,3 @@ AcquirePushLockSharedWithTimeout(
         STATUS_SUCCESS : STATUS_TIMEOUT;
 }
 #endif // SAFECHK_H
-

@@ -15,5 +15,6 @@ LoadRules(
 // limpar a memoria usada para as regras carregadas
 VOID
 FreeRulesList(VOID);
-
+VOID
+FreeRulesListInternal(VOID);
 #endif // RULES_H
